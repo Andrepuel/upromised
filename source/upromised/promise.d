@@ -39,8 +39,8 @@ private:
             cb(resolved_).then((a) { r.resolve(a); });
         }
     }
-public:
 
+public:
     Promisify!R then(R)(R delegate(T) cb) {
         auto r = new Promisify!R();
         if (isResolved_) {
@@ -68,7 +68,7 @@ if (is(T == void))
     void resolve() {
         super.resolve(null);
     }
-    Promise!R then(R)(R delegate() cb) {
+    Promisify!R then(R)(R delegate() cb) {
         return super.then((void*) { return cb();});
     }
 }
@@ -135,7 +135,9 @@ private:
     Promise!bool delegate(T) each_;
     Promise!bool eachThen_;  
 
-    static Promise!bool eachInvoke(R)(R delegate(T) cb, T t) {
+    static Promise!bool eachInvoke(R)(R delegate(T) cb, T t)
+    if (!is(Promisify!R == R))
+    {
         auto r = new Promise!bool;
         static if (is(R == void)) {
             cb(t);
