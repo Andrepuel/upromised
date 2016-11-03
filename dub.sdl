@@ -1,0 +1,6 @@
+name "upromised"
+description "A minimal D application."
+authors "Andre Puel"
+copyright "Copyright © 2016, Andre Puel"
+license "proprietary"
+dependency "libuv" version="~>1.9.1"
