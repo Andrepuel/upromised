@@ -230,7 +230,9 @@ unittest {
 
 class PromiseIterator(T) {
 private:
-    T[] resolved_;
+    import std.typecons : Tuple;
+
+    Tuple!(T,Throwable,Promise!bool)[] resolved_;
     bool end_;
     Promise!bool delegate(T) each_;
     Promise!bool eachThen_;  
@@ -256,14 +258,33 @@ private:
         }
     }
 
+    Promise!bool stop() {
+        import std.algorithm : swap;
+
+        Promise!bool then;
+        swap(then, eachThen_);
+        each_ = null;
+        return then;
+    }
+
+    void popResolved(bool cont) {
+        Promise!bool resolvedPromise = resolved_[0][2];
+        resolved_ = resolved_[1..$];
+        resolvedPromise.resolve(cont);
+    }
+
     void resolveOne() {
-        each_(resolved_[0]).then((cont) {
-            resolved_ = resolved_[1..$];
+        auto next = resolved_[0];
+        if (next[1] !is null) {
+            stop().reject(next[1]);
+            popResolved(false);
+            return;
+        }
+
+        each_(resolved_[0][0]).then((cont) {
+            popResolved(cont);
             if (!cont) {
-                auto then = eachThen_;
-                eachThen_ = null;
-                each_ = null;
-                then.resolve(false);
+                stop().resolve(false);
                 return;
             }
 
@@ -277,21 +298,36 @@ private:
                 return;
             }
         }).except((Throwable e) {
-            resolved_ = resolved_[1..$];
-            auto then = eachThen_;
-            eachThen_ = null;
-            each_ = null;
-            then.reject(e);
+            popResolved(false);
+            stop().reject(e);
         });
     }
 
 public:
-    void resolve(T a) {
+    Promise!bool resolve(T a) {
+        import std.typecons : tuple;
+
         assert(!end_);
-        resolved_ ~= a;
+        Promise!bool r = new Promise!bool;
+        resolved_ ~= tuple(a, Throwable.init, r);
         if (each_ && resolved_.length == 1) {
             resolveOne();
         }
+
+        return r;
+    }
+
+    Promise!bool reject(Throwable a) {
+        import std.typecons : tuple;
+
+        assert(!end_);
+        Promise!bool r = new Promise!bool;
+        resolved_ ~= tuple(T.init, a, r);
+        if (each_ && resolved_.length == 1) {
+            resolveOne();
+        }
+
+        return r;
     }
 
     void resolve() {
@@ -354,4 +390,62 @@ unittest { //Iterator catching
         caught = true;
     });
     assert(caught);
+}
+unittest { //Resolve done Promise
+    auto a = new PromiseIterator!int;
+    bool done = false;
+    a.resolve(2).then((a) {
+        assert(!a);
+        done = true;
+    });
+    assert(!done);
+    a.each((a) {
+        return false;
+    });
+    assert(done);
+    done = false;
+    Promise!bool delayed;
+    a.each((a) {
+        delayed = new Promise!bool;
+        return delayed;
+    });
+    assert(!done);
+    bool done2 = false;
+    a.resolve(3).then((a) {
+        assert(a);
+        done = true;
+    });
+    a.resolve(4).then((a) {
+        assert(!a);
+        done2 = true;
+    });
+    assert(!done);
+    assert(!done2);
+    delayed.resolve(true);
+    assert(done);
+    assert(!done2);
+    delayed.resolve(false);
+    assert(done);
+    assert(done2);
+}
+unittest { // Rejecting iterator
+    auto a = new PromiseIterator!int;
+    bool called = false;
+    auto err = new Exception("yada");
+    class X : Exception {
+        this() {
+            super("yada");
+        }
+    }
+    a.each((a) {
+        assert(false);
+    }).except((X err) {
+        assert(false);
+    }).except((Exception e) {
+        assert(err is e);
+        called = true;
+    });
+    assert(!called);
+    a.reject(err);
+    assert(called);
 }

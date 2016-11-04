@@ -5,6 +5,16 @@ import std.format : format;
 import deimos.libuv.uv;
 import deimos.libuv._d;
 
+void fatal(Throwable e = null, string file = __FILE__, ulong line = __LINE__) {
+    import core.stdc.stdlib : abort;
+    import std.stdio : stderr;
+    stderr.writeln("%s(%s): Fatal error".format(file, line));
+    if (e) {
+        stderr.writeln(e);
+    }
+    abort();
+}
+
 class UvError : Exception {
 	this(int code) {
 		super("UV error code %s".format(-code));
@@ -84,23 +94,33 @@ public:
 		return listenPromise;
 	}
 
+    private extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) {
+        buf.base = cast(char*)(new ubyte[size]).ptr;
+        gcretain(buf.base);
+        buf.len = size;
+    }
+    private extern (C) static void readCb(uv_stream_t* selfSelf, long nread, inout(uv_buf_t)* buf) {
+        auto self = getSelf!TcpSocket(selfSelf);
+        if (nread == uv_errno_t.UV_EOF) {
+            self.readPromise.resolve();
+            return;
+        }
+        if (buf.base !is null) gcrelease(buf.base);
+        enforce(nread >= 0);
+        uv_read_stop(cast(uv_stream_t*)&self.self);
+        self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]).then((cont) {
+            if (cont) {
+                uv_read_start(cast(uv_stream_t*)&self.self, &readAlloc, &readCb).uvCheck();
+            } else {
+                scope(failure) fatal();
+                self.readPromise = null;
+            }
+        }).except((Throwable e) { self.readPromise.reject(e); });
+    }
 	PromiseIterator!(const(ubyte)[]) read() {
 		assert(readPromise is null);
 		readPromise = new PromiseIterator!(const(ubyte)[]);
-		uv_read_start(cast(uv_stream_t*)&self, (handle, size, buf) {
-			buf.base = cast(char*)(new ubyte[size]).ptr;
-			gcretain(buf.base);
-			buf.len = size;
-		}, (selfSelf, nread, buf) {
-			auto self = getSelf!TcpSocket(selfSelf);
-			if (nread == uv_errno_t.UV_EOF) {
-				self.readPromise.resolve();
-				return;
-			}
-			if (buf.base !is null) gcrelease(buf.base);
-			enforce(nread >= 0);
-			self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]);
-		}).uvCheck();
+		uv_read_start(cast(uv_stream_t*)&self, &readAlloc, &readCb).uvCheck();
 		return readPromise;
 	}
 
