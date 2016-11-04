@@ -9,6 +9,9 @@ template Promisify(T) {
         alias Promisify = Promise!T;
     }
 }
+static assert(is(Promisify!int == Promise!int));
+static assert(is(Promisify!(Promise!int) == Promise!int));
+static assert(is(Promisify!void == Promise!void));
 
 private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) {
     static if(is(typeof(b(args)) : Promise_)) {
@@ -46,19 +49,16 @@ protected:
         }
     }
 }
-
-class Promise(T) : Promise_
-if (!is(T == void))
-{
+class PromiseBase(T...) : Promise_ {
 private:
-    enum IsPromise = true;
-    alias T_ = T;
-    T resolved_;
+    import std.typecons : Tuple;
+    alias Types_ = T;
+    Tuple!T resolved_;
     bool isResolved_;
     void delegate()[] then_;
 
-    void resolveOne(R,J)(Promise!R r, J delegate(T) cb)
-    if (is(Promisify!J == Promise!R))
+    void resolveOne(R,J,U...)(Promise!R r, J delegate(U) cb)
+    if(is(Promisify!J == Promise!R) && is(U == Types_))
     {
         if (rejected_ !is null) {
             r.reject(rejected_);
@@ -66,7 +66,7 @@ private:
         }
 
         try {
-            chainPromise!cb(r, resolved_);
+            chainPromise!cb(r, resolved_.expand);
         } catch(Throwable e) {
             r.reject(e);
         }
@@ -79,17 +79,30 @@ private:
             next();
         }
     }
-public:
-    Promisify!R then(R)(R delegate(T) cb) {
+
+protected:
+    Promisify!R thenBase(R,U...)(R delegate(U) cb)
+    if(is(U == Types_))
+    {
         auto r = new Promisify!R();
         if (isResolved_) {
             resolveOne(r, cb);
         } else {
-            then_ ~= () => resolveOne(r, cb); 
+            then_ ~= () => resolveOne(r, cb);
         }
         return r;
     }
 
+    void resolveBase(Types_ value)
+    {
+        import std.typecons : tuple;
+
+        resolved_ = tuple(value);
+        isResolved_ = true;
+        resolveAll();
+    }
+
+public:
     Promise!void except(R,E)(R delegate(E) cb)
     if (is(Promisify!R == Promise!void) && is(E : Throwable))
     {
@@ -102,11 +115,6 @@ public:
         return r;
     }
 
-    void resolve(T value) {
-        resolved_ = value;
-        isResolved_ = true;
-        resolveAll();
-    }
 
     void reject(Throwable err) {
         isResolved_ = true;
@@ -114,14 +122,33 @@ public:
         resolveAll();
     }
 }
-class Promise(T) : Promise!(void*)
+class Promise(T) : PromiseBase!T
+if (!is(T == void))
+{
+private:
+    alias T_ = T;
+
+public:
+    void resolve(T v) {
+        resolveBase(v);
+    }
+
+    Promisify!R then(R)(R delegate(T) cb) {
+        return thenBase(cb);
+    }
+}
+class Promise(T) : PromiseBase!()
 if (is(T == void))
 {
+private:
+    alias T_ = void;
+
+public:
     void resolve() {
-        super.resolve(null);
+        resolveBase();
     }
     Promisify!R then(R)(R delegate() cb) {
-        return super.then((void*) { return cb();});
+        return thenBase!R(cb);
     }
 }
 unittest { // Multiple then
@@ -249,7 +276,7 @@ private:
             return r3;
         }
 
-        static if (is(Promisify!R.T_ == void*)) {
+        static if (is(Promisify!R.T_ == void)) {
             auto r2 = new Promise!bool;
             r.then(() => r2.resolve(true));
             return r2;
