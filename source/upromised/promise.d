@@ -10,13 +10,46 @@ template Promisify(T) {
     }
 }
 
+private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) {
+    static if(is(typeof(b(args)) : Promise_)) {
+        static if (is(R == void)) {
+            b(args).then(() => t.resolve());
+        } else {
+            b(args).then((a) => t.resolve(a));
+        }
+    } else {
+        static if (is(R == void)) {
+            b(args);
+            t.resolve();
+        } else {
+            t.resolve(b(args));
+        }
+    }
+}
+
 class Promise_ {
+protected:
+    Throwable rejected_;
+
+    void resolveExceptOne(R,E)(Promise!void r, R delegate(E) cb)
+    if (is(Promisify!R == Promise!void))
+    {
+        if (rejected_ is null) {
+            r.resolve();
+        } else {
+            E err = cast(E) rejected_;
+            if (err) {
+                chainPromise!cb(r, err);
+            } else {
+                r.reject(rejected_);
+            }
+        }
+    }
 }
 
 class Promise(T) : Promise_
 if (!is(T == void))
 {
-import std.typecons : Tuple, tuple;
 private:
     enum IsPromise = true;
     alias T_ = T;
@@ -24,22 +57,28 @@ private:
     bool isResolved_;
     void delegate()[] then_;
 
-    void resolveOne(R)(Promise!R r, R delegate(T) cb) {
-        static if (is(R == void)) {
-            cb(resolved_);
-            r.resolve();
-        } else {
-            r.resolve(cb(resolved_));
+    void resolveOne(R,J)(Promise!R r, J delegate(T) cb)
+    if (is(Promisify!J == Promise!R))
+    {
+        if (rejected_ !is null) {
+            r.reject(rejected_);
+            return;
         }
-    }
-    void resolveOne(R)(Promise!R r, Promise!R delegate(T) cb) {
-        static if (is(R == void)) {
-            cb(resolved_).then(() { r.resolve(); });
-        } else {
-            cb(resolved_).then((a) { r.resolve(a); });
+
+        try {
+            chainPromise!cb(r, resolved_);
+        } catch(Throwable e) {
+            r.reject(e);
         }
     }
 
+    void resolveAll() {
+        while (then_.length > 0) {
+            auto next = then_[0];
+            then_ = then_[1..$];
+            next();
+        }
+    }
 public:
     Promisify!R then(R)(R delegate(T) cb) {
         auto r = new Promisify!R();
@@ -51,16 +90,29 @@ public:
         return r;
     }
 
+    Promise!void except(R,E)(R delegate(E) cb)
+    if (is(Promisify!R == Promise!void) && is(E : Throwable))
+    {
+        auto r = new Promise!void;
+        if (isResolved_) {
+            resolveExceptOne(r, cb);
+        } else {
+            then_ ~= () => resolveExceptOne(r, cb);
+        }
+        return r;
+    }
+
     void resolve(T value) {
         resolved_ = value;
         isResolved_ = true;
-        while (then_.length > 0) {
-            auto next = then_[0];
-            then_ = then_[1..$];
-            next();
-        }
+        resolveAll();
     }
 
+    void reject(Throwable err) {
+        isResolved_ = true;
+        rejected_ = err;
+        resolveAll();
+    }
 }
 class Promise(T) : Promise!(void*)
 if (is(T == void))
@@ -105,7 +157,6 @@ unittest { // Void Chaining
     a.resolve(3);
     assert(sum == 6);
 }
-
 unittest { // Chaining
     auto a = new Promise!int;
     int delayValue;
@@ -127,6 +178,55 @@ unittest { // Chaining
     delayed.resolve("2");
     assert(finalValue == "2");
 }
+unittest { //Exceptions
+    auto a = new Promise!int;
+
+    auto err = new Exception("yada");
+    bool caught = false;
+    a.except((Throwable e) {
+        assert(err is e);
+        caught = true;
+    });
+    assert(!caught);
+    a.reject(err);
+    assert(caught);
+}
+unittest { //Exception chaining
+    auto a = new Promise!int;
+    class X : Exception {
+        this() {
+            super("X");
+        }
+    }
+
+    bool caught = false;
+    auto err = new Exception("yada");
+    a.except((X _) {
+        assert(false);
+    }).except((Throwable e) {
+        assert(e is err);
+        caught = true;
+    });
+    assert(!caught);
+    a.reject(err);
+    assert(caught);
+}
+unittest {
+    auto a = new Promise!int;
+    auto err = new Exception("yada");
+    bool caught = false;
+    a.then((a) {
+        throw err;
+    }).then(() {
+        assert(false);
+    }).except((Exception e) {
+        assert(e == err);
+        caught = true;
+    });
+    assert(!caught);
+    a.resolve(2);
+    assert(caught);
+}
 
 class PromiseIterator(T) {
 private:
@@ -136,26 +236,24 @@ private:
     Promise!bool eachThen_;  
 
     static Promise!bool eachInvoke(R)(R delegate(T) cb, T t)
-    if (!is(Promisify!R == R))
+    if (is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
     {
-        auto r = new Promise!bool;
-        static if (is(R == void)) {
-            cb(t);
-            r.resolve(true);
-        } else {
-            r.resolve(cb(t));
+        auto r = new Promisify!R;
+        try {
+            chainPromise!cb(r, t);
+        } catch(Throwable e) {
+            auto r3 = new Promise!bool;
+            r3.reject(e);
+            return r3;
         }
-        return r;
-    }
 
-    static Promise!bool eachInvoke(R)(Promise!R delegate(T) cb, T t) {
-        auto r = new Promise!bool;
-        static if (is(R == void)) {
-            cb(t).then(() => r.resolve(true));
+        static if (is(Promisify!R.T_ == void*)) {
+            auto r2 = new Promise!bool;
+            r.then(() => r2.resolve(true));
+            return r2;
         } else {
-            cb(t).then((v) => r.resolve(v));
+            return r;
         }
-        return r;
     }
 
     void resolveOne() {
@@ -178,6 +276,12 @@ private:
                 eachThen_.resolve(true);
                 return;
             }
+        }).except((Throwable e) {
+            resolved_ = resolved_[1..$];
+            auto then = eachThen_;
+            eachThen_ = null;
+            each_ = null;
+            then.reject(e);
         });
     }
 
@@ -228,4 +332,26 @@ unittest { //Iterator
     assert(sum == 3);
     a.resolve();
     assert(sum == 0);
+}
+unittest { //Iterator catching
+    PromiseIterator!int a = new PromiseIterator!int;
+    auto err = new Exception("yada");
+    bool caught = false;
+    a.each((b) {
+        throw err;
+    }).except((Exception e) {
+        assert(e == err);
+        caught = true;
+    });
+    assert(!caught);
+    a.resolve(2);
+    assert(caught);
+    caught = false;
+    a.resolve(3);
+    assert(!caught);
+    a.each((b) {
+        assert(b == 3);
+        caught = true;
+    });
+    assert(caught);
 }
