@@ -130,7 +130,7 @@ public:
 			r.resolve();
 		});
 		err.uvCheck(r);
-		r.except((Throwable e) {}).then(() { gcrelease(r);});
+		r.finall(() => gcrelease(r));
 		return r;
 	}
 	class WritePromise : Promise!void {
@@ -147,7 +147,7 @@ public:
 			r.resolve();
 		});
 		err.uvCheck(r);
-		r.except((Throwable e) {}).then(() => gcrelease(r));
+		r.finall(() => gcrelease(r));
 		return r;
 	}
 	class ShutdownPromise : Promise!void {
@@ -171,7 +171,7 @@ public:
 			r.resolve();
 		});
 		err.uvCheck(r);
-		r.except((Throwable e) {}).then(() { gcrelease(r);});
+		r.finall(() => gcrelease(r));
 		return r;
 	}
 	class ConnectPromise : Promise!void {

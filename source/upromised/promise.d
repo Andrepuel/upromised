@@ -9,24 +9,30 @@ template Promisify(T) {
         alias Promisify = Promise!T;
     }
 }
-//static assert(is(Promisify!int == Promise!int));
-//static assert(is(Promisify!(Promise!int) == Promise!int));
-//static assert(is(Promisify!void == Promise!void));
+static assert(is(Promisify!int == Promise!int));
+static assert(is(Promisify!(Promise!int) == Promise!int));
+static assert(is(Promisify!void == Promise!void));
 
 private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) {
-    static if(is(typeof(b(args)) : Promise_)) {
-        static if (is(R == void)) {
-            b(args).then(() => t.resolve());
+    try {
+        static if(is(typeof(b(args)) : Promise_)) {
+            auto intermediary = b(args);
+            static if (is(R == void)) {
+                intermediary.then(() => t.resolve());
+            } else {
+                intermediary.then((a) => t.resolve(a));
+            }
+            intermediary.except((Throwable e) => t.reject(e));
         } else {
-            b(args).then((a) => t.resolve(a));
+            static if (is(R == void)) {
+                b(args);
+                t.resolve();
+            } else {
+                t.resolve(b(args));
+            }
         }
-    } else {
-        static if (is(R == void)) {
-            b(args);
-            t.resolve();
-        } else {
-            t.resolve(b(args));
-        }
+    } catch(Throwable e) {
+        t.reject(e);
     }
 }
 
@@ -65,11 +71,29 @@ private:
             return;
         }
 
-        try {
-            chainPromise!cb(r, resolved_.expand);
-        } catch(Throwable e) {
-            r.reject(e);
+        chainPromise!cb(r, resolved_.expand);
+    }
+
+    void resolveFinallyOne(R,J)(Promise!R r, J delegate() cb)
+    if(is(Promisify!J == Promise!R))
+    {
+        import std.typecons : Tuple;
+        static if (is(R == void)) {
+            alias Rs = Tuple!().Types;
+        } else {
+            alias Rs = Tuple!R.Types;
         }
+
+        auto r2 = new Promise!R;
+        chainPromise!cb(r2);
+        r2.then((Rs args) {
+            if (rejected_ !is null) {
+                r.reject(rejected_);
+            } else {
+                r.resolve(args);
+            }
+        });
+        r2.except((Throwable e) => r.reject(e));
     }
 
     void resolveAll() {
@@ -80,16 +104,20 @@ private:
         }
     }
 
+    void thenPush(void delegate() cb) {
+        if (isResolved_) {
+            cb();
+        } else {
+            then_ ~= cb;
+        }
+    }
+
 protected:
     Promisify!R thenBase(R,U...)(R delegate(U) cb)
     if(is(U == Types_))
     {
         auto r = new Promisify!R();
-        if (isResolved_) {
-            resolveOne(r, cb);
-        } else {
-            then_ ~= () => resolveOne(r, cb);
-        }
+        thenPush(() => resolveOne(r, cb));
         return r;
     }
 
@@ -107,14 +135,15 @@ public:
     if (is(Promisify!R == Promise!void) && is(E : Throwable))
     {
         auto r = new Promise!void;
-        if (isResolved_) {
-            resolveExceptOne(r, cb);
-        } else {
-            then_ ~= () => resolveExceptOne(r, cb);
-        }
+        thenPush(() => resolveExceptOne(r, cb));
         return r;
     }
 
+    Promisify!R finall(R)(R delegate() cb) {
+        auto r = new Promisify!R;
+        thenPush(() => resolveFinallyOne(r, cb));
+        return r;
+    }
 
     void reject(Throwable err) {
         isResolved_ = true;
@@ -288,18 +317,10 @@ private:
     if (is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
     {
         auto r = new Promisify!R;
-        try {
-            chainPromise!cb(r, t);
-        } catch(Throwable e) {
-            auto r3 = new Promise!bool;
-            r3.reject(e);
-            return r3;
-        }
+        chainPromise!cb(r, t);
 
         static if (is(Promisify!R.T_ == void)) {
-            auto r2 = new Promise!bool;
-            r.then(() => r2.resolve(true));
-            return r2;
+            return r.then(() => true);
         } else {
             return r;
         }
@@ -514,5 +535,92 @@ unittest { //Resolved and rejected promise constructor
         assert(e is err);
         called = true;
     });
+    assert(called);
+}
+unittest { //Finally
+    auto a = new Promise!int;
+    auto called = [false,false,false];
+    auto err = new Exception("yada");
+    a.then((a) {
+    }).except((Exception e) {
+        assert(false);
+    }).finall(() {
+        called[0] = true;
+    }).then(() {
+        throw err;
+    }).finall(() {
+        called[1] = true;
+    }).except((Exception e) {
+        assert(called[1]);
+        called[2] = true;
+        assert(e is err);
+    });
+    assert(!called[0]);
+    assert(!called[1]);
+    assert(!called[2]);
+    a.resolve(1);
+    assert(called[0]);
+    assert(called[1]);
+    assert(called[2]);
+}
+unittest { //Finally might throw Exception
+    auto a = new Promise!int;
+    auto called = false;
+    auto err = new Exception("yada");
+    a.finall(() {
+        throw err;
+    }).then(() {
+        assert(false);
+    }).except((Exception e) {
+        assert(e is err);
+        called = true;
+    });
+    assert(!called);
+    a.resolve(2);
+    assert(called);
+}
+unittest { //Finally return promise
+    auto a = new Promise!int;
+    auto called = false;
+    auto err = new Exception("yada");
+    a.finall(() {
+        return Promise!void.rejected(err);
+    }).then(() {
+        assert(false);
+    }).except((Exception e) {
+        assert(err is e);
+        called = true;
+    });
+    assert(!called);
+    a.resolve(2);
+    assert(called);
+}
+unittest { //Return failed promise
+    auto a = new Promise!int;
+    auto called = false;
+    auto err = new Exception("yada");
+    a.then((a) {
+        return Promise!void.rejected(err);
+    }).then(() {
+        assert(false);
+    }).except((Exception e) {
+        assert(err is e);
+        called = true;
+    });
+    assert(!called);
+    a.resolve(2);
+    assert(called);
+}
+unittest { //Finally returning a value
+    auto a = new Promise!int;
+    bool called = false;
+    a.finall(() {
+        return 2;
+    }).then((a) {
+        assert(a == 2);
+        called = true;
+    });
+    assert(!called);
+    a.resolve(0);
     assert(called);
 }
