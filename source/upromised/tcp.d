@@ -1,50 +1,19 @@
 module upromised.tcp;
 import upromised.promise : PromiseIterator, Promise;
+import upromised.memory : getSelf, gcretain, gcrelease;
+import upromised.uv : uvCheck;
+import upromised : fatal;
+import upromised.dns : Addrinfo;
 import std.exception : enforce;
 import std.format : format;
 import deimos.libuv.uv;
 import deimos.libuv._d;
 
-void fatal(Throwable e = null, string file = __FILE__, ulong line = __LINE__) {
-    import core.stdc.stdlib : abort;
-    import std.stdio : stderr;
-    stderr.writeln("%s(%s): Fatal error".format(file, line));
-    if (e) {
-        stderr.writeln(e);
-    }
-    abort();
-}
-
-class UvError : Exception {
-	this(int code) {
-		super("UV error code %s".format(-code));
-	}
-}
-
-void uvCheck(int r) {
-	if (r < 0) throw new UvError(r);
-}
 
 extern (C) void alloc_buffer(uv_handle_t*, size_t size, uv_buf_t* buf) {
 	import core.stdc.stdlib : malloc;
 	buf.base = cast(char *)malloc(size);
 	buf.len = size;
-}
-
-void gcretain(T)(T a) {
-	import core.memory : GC;
-	GC.addRoot(cast(void*)a);
-	GC.setAttr(cast(void*)a, GC.BlkAttr.NO_MOVE);
-}
-
-void gcrelease(T)(T a) {
-	import core.memory : GC;
-	GC.removeRoot(cast(void*)a);
-    GC.clrAttr(cast(void*)a, GC.BlkAttr.NO_MOVE);
-}
-
-T getSelf(T,Y)(Y* a) {
-	return cast(T)((cast(void*)a) - T.self.offsetof);
 }
 
 private uv_stream_t* stream(ref uv_tcp_t self) {
@@ -60,12 +29,13 @@ private sockaddr* upcast(ref sockaddr_in self) {
 class TcpSocket {
 private:
 	uv_loop_t* ctx;
-	uv_tcp_t self;
 	Promise!void closePromise;
 	PromiseIterator!TcpSocket listenPromise;
 	PromiseIterator!(const(ubyte)[]) readPromise;
 
 public:
+	uv_tcp_t self;
+
 	this(uv_loop_t* ctx) {
 		this.ctx = ctx;
 		uv_tcp_init(ctx, &self).uvCheck();
@@ -84,24 +54,31 @@ public:
 		return closePromise;
 	}
 
-	void bind(const(char)[] addrStr, ushort port) {
+	void bind(Addrinfo addrinfo) {
 		import std.string : toStringz;
 
-		sockaddr_in addr;
-		uv_ip4_addr(addrStr.toStringz, port, &addr).uvCheck();
-		uv_tcp_bind(&self, addr.upcast, 0).uvCheck();
+		auto addr = addrinfo.get();
+		enforce(addr.length > 0);
+		uv_tcp_bind(&self, addr[0].ai_addr, 0).uvCheck();
 	}
 
 	PromiseIterator!TcpSocket listen(int backlog) {
+        import std.algorithm : swap;
+
 		assert(listenPromise is null);
 		listenPromise = new PromiseIterator!TcpSocket;
-		uv_listen(self.stream, backlog, (selfSelf, status) {
+		auto err = uv_listen(self.stream, backlog, (selfSelf, status) {
 			enforce(status == 0);
 			auto self = getSelf!TcpSocket(selfSelf);
 			auto conn = new TcpSocket(self.ctx);
 			uv_accept(self.self.stream, conn.self.stream).uvCheck();
 			self.listenPromise.resolve(conn);
-		}).uvCheck();
+		});
+        if (err.uvCheck(listenPromise)) {
+            PromiseIterator!TcpSocket r;
+            swap(r, listenPromise);
+            return r;
+        }
 		return listenPromise;
 	}
 
@@ -129,24 +106,31 @@ public:
         }).except((Throwable e) { self.readPromise.reject(e); });
     }
 	PromiseIterator!(const(ubyte)[]) read() {
+		import std.algorithm : swap;
+
 		assert(readPromise is null);
 		readPromise = new PromiseIterator!(const(ubyte)[]);
-		uv_read_start(self.stream, &readAlloc, &readCb).uvCheck();
+		int err = uv_read_start(self.stream, &readAlloc, &readCb);
+		if (err.uvCheck(readPromise)) {
+			PromiseIterator!(const(ubyte)[]) r;
+			swap(r, readPromise);
+			return r;
+		}
 		return readPromise;
 	}
 
 	Promise!void write(immutable(ubyte)[] data) {
 		WritePromise r = new WritePromise;
 		gcretain(r);
-		scope(failure) gcrelease(r);
 		r.data.base = cast(char*)data.ptr;
 		r.data.len = data.length;
-		uv_write(&r.self, self.stream, &r.data, 1, (rSelf, status) {
+		int err = uv_write(&r.self, self.stream, &r.data, 1, (rSelf, status) {
 			auto r = getSelf!WritePromise(rSelf);
-			gcrelease(r);
 			enforce(status == 0);
 			r.resolve();
-		}).uvCheck();
+		});
+		err.uvCheck(r);
+		r.except((Throwable e) {}).then(() { gcrelease(r);});
 		return r;
 	}
 	class WritePromise : Promise!void {
@@ -157,34 +141,37 @@ public:
 	Promise!void shutdown() {
 		ShutdownPromise r = new ShutdownPromise;
 		gcretain(r);
-		scope(failure) gcrelease(r);
-		uv_shutdown(&r.self, self.stream, (rSelf, status) {
+		int err = uv_shutdown(&r.self, self.stream, (rSelf, status) {
 			auto r = getSelf!ShutdownPromise(rSelf);
-			gcrelease(r);
 			enforce(status == 0);
 			r.resolve();
-		}).uvCheck();
+		});
+		err.uvCheck(r);
+		r.except((Throwable e) {}).then(() => gcrelease(r));
 		return r;
 	}
 	class ShutdownPromise : Promise!void {
 		uv_shutdown_t self;
 	}
 
-	Promise!void connect(string addrStr, ushort port) {
+	Promise!void connect(Addrinfo addrinfo) {
 		import std.string : toStringz;
 
-		sockaddr_in addr;
-		uv_ip4_addr(addrStr.toStringz, port, &addr).uvCheck();
+		auto addr = addrinfo.get();
+		if (addr.length == 0) {
+			return Promise!void.rejected(new Exception("Empty address info"));
+		}
 
 		ConnectPromise r = new ConnectPromise;
 		gcretain(r);
 		scope(failure) gcrelease(r);
-		uv_tcp_connect(&r.self, &self, addr.upcast, (rSelf, status) {
+		int err = uv_tcp_connect(&r.self, &self, addr[0].ai_addr, (rSelf, status) {
 			auto r = getSelf!ConnectPromise(rSelf);
-			gcrelease(r);
 			enforce(status == 0);
 			r.resolve();
 		});
+		err.uvCheck(r);
+		r.except((Throwable e) {}).then(() { gcrelease(r);});
 		return r;
 	}
 	class ConnectPromise : Promise!void {
