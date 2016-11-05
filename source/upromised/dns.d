@@ -16,7 +16,7 @@ class Addrinfo {
         uv_freeaddrinfo(res);
     }
 
-    addrinfo*[] get() {
+    addrinfo*[] get() nothrow {
         addrinfo*[] r;
         auto each = res;
         while(each !is null) {
@@ -27,11 +27,11 @@ class Addrinfo {
     }
 }
 
-Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, ushort port) {
+Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, ushort port) nothrow {
     import std.conv : to;
     return getAddrinfo(ctx, node, port.to!string);
 }
-Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, const(char)[] service) {
+Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, const(char)[] service) nothrow {
     import std.string : toStringz;
     auto r = new GetAddrinfoPromise;
     gcretain(r);

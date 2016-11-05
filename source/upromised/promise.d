@@ -13,7 +13,7 @@ static assert(is(Promisify!int == Promise!int));
 static assert(is(Promisify!(Promise!int) == Promise!int));
 static assert(is(Promisify!void == Promise!void));
 
-private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) {
+private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
     try {
         static if(is(typeof(b(args)) : Promise_)) {
             auto intermediary = b(args);
@@ -40,7 +40,7 @@ class Promise_ {
 protected:
     Throwable rejected_;
 
-    void resolveExceptOne(R,E)(Promise!void r, R delegate(E) cb)
+    void resolveExceptOne(R,E)(Promise!void r, R delegate(E) cb) nothrow
     if (is(Promisify!R == Promise!void))
     {
         if (rejected_ is null) {
@@ -61,9 +61,9 @@ private:
     alias Types_ = T;
     Tuple!T resolved_;
     bool isResolved_;
-    void delegate()[] then_;
+    void delegate() nothrow[] then_;
 
-    void resolveOne(R,J,U...)(Promise!R r, J delegate(U) cb)
+    void resolveOne(R,J,U...)(Promise!R r, J delegate(U) cb) nothrow
     if(is(Promisify!J == Promise!R) && is(U == Types_))
     {
         if (rejected_ !is null) {
@@ -74,7 +74,7 @@ private:
         chainPromise!cb(r, resolved_.expand);
     }
 
-    void resolveFinallyOne(R,J)(Promise!R r, J delegate() cb)
+    void resolveFinallyOne(R,J)(Promise!R r, J delegate() cb) nothrow
     if(is(Promisify!J == Promise!R))
     {
         import std.typecons : Tuple;
@@ -96,7 +96,7 @@ private:
         r2.except((Throwable e) => r.reject(e));
     }
 
-    void resolveAll() {
+    void resolveAll() nothrow {
         while (then_.length > 0) {
             auto next = then_[0];
             then_ = then_[1..$];
@@ -104,7 +104,7 @@ private:
         }
     }
 
-    void thenPush(void delegate() cb) {
+    void thenPush(void delegate() nothrow cb) nothrow {
         if (isResolved_) {
             cb();
         } else {
@@ -113,7 +113,7 @@ private:
     }
 
 protected:
-    Promisify!R thenBase(R,U...)(R delegate(U) cb)
+    Promisify!R thenBase(R,U...)(R delegate(U) cb) nothrow
     if(is(U == Types_))
     {
         auto r = new Promisify!R();
@@ -121,7 +121,7 @@ protected:
         return r;
     }
 
-    void resolveBase(Types_ value)
+    void resolveBase(Types_ value) nothrow
     {
         import std.typecons : tuple;
 
@@ -131,7 +131,7 @@ protected:
     }
 
 public:
-    Promise!void except(R,E)(R delegate(E) cb)
+    Promise!void except(R,E)(R delegate(E) cb) nothrow
     if (is(Promisify!R == Promise!void) && is(E : Throwable))
     {
         auto r = new Promise!void;
@@ -139,19 +139,19 @@ public:
         return r;
     }
 
-    Promisify!R finall(R)(R delegate() cb) {
+    Promisify!R finall(R)(R delegate() cb) nothrow {
         auto r = new Promisify!R;
         thenPush(() => resolveFinallyOne(r, cb));
         return r;
     }
 
-    void reject(Throwable err) {
+    void reject(Throwable err) nothrow {
         isResolved_ = true;
         rejected_ = err;
         resolveAll();
     }
 
-    static auto resolved(Types_ t) {
+    static auto resolved(Types_ t) nothrow {
         static if (Types_.length == 0) {
             auto r = new Promise!void;
         } else {
@@ -161,7 +161,7 @@ public:
         return r;
     }
 
-    static auto rejected(Throwable e) {
+    static auto rejected(Throwable e) nothrow {
         static if (Types_.length == 0) {
             auto r = new Promise!void;
         } else {
@@ -178,11 +178,11 @@ private:
     alias T_ = T;
 
 public:
-    void resolve(T v) {
+    void resolve(T v) nothrow {
         resolveBase(v);
     }
 
-    Promisify!R then(R)(R delegate(T) cb) {
+    Promisify!R then(R)(R delegate(T) cb) nothrow {
         return thenBase(cb);
     }
 }
@@ -193,10 +193,10 @@ private:
     alias T_ = void;
 
 public:
-    void resolve() {
+    void resolve() nothrow {
         resolveBase();
     }
-    Promisify!R then(R)(R delegate() cb) {
+    Promisify!R then(R)(R delegate() cb) nothrow {
         return thenBase!R(cb);
     }
 }
@@ -310,10 +310,10 @@ private:
 
     Tuple!(T,Throwable,Promise!bool)[] resolved_;
     bool end_;
-    Promise!bool delegate(T) each_;
+    Promise!bool delegate(T) nothrow each_;
     Promise!bool eachThen_;  
 
-    static Promise!bool eachInvoke(R)(R delegate(T) cb, T t)
+    static Promise!bool eachInvoke(R)(R delegate(T) cb, T t) nothrow
     if (is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
     {
         auto r = new Promisify!R;
@@ -326,7 +326,7 @@ private:
         }
     }
 
-    Promise!bool stop() {
+    Promise!bool stop() nothrow {
         import std.algorithm : swap;
 
         Promise!bool then;
@@ -335,13 +335,13 @@ private:
         return then;
     }
 
-    void popResolved(bool cont) {
+    void popResolved(bool cont) nothrow {
         Promise!bool resolvedPromise = resolved_[0][2];
         resolved_ = resolved_[1..$];
         resolvedPromise.resolve(cont);
     }
 
-    void resolveOne() {
+    void resolveOne() nothrow {
         auto next = resolved_[0];
         if (next[1] !is null) {
             stop().reject(next[1]);
@@ -372,7 +372,7 @@ private:
     }
 
 public:
-    Promise!bool resolve(T a) {
+    Promise!bool resolve(T a) nothrow {
         import std.typecons : tuple;
 
         assert(!end_);
@@ -385,7 +385,7 @@ public:
         return r;
     }
 
-    Promise!bool reject(Throwable a) {
+    Promise!bool reject(Throwable a) nothrow {
         import std.typecons : tuple;
 
         assert(!end_);
@@ -398,7 +398,7 @@ public:
         return r;
     }
 
-    void resolve() {
+    void resolve() nothrow {
         assert(!end_);
         end_ = true;
         if (eachThen_ && resolved_.length == 0) {
@@ -406,7 +406,7 @@ public:
         }
     }
 
-    Promise!bool each(R)(R delegate(T) cb)
+    Promise!bool each(R)(R delegate(T) cb) nothrow
     if(is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
     {
         assert(each_ is null);

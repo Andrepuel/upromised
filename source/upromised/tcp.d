@@ -16,13 +16,13 @@ extern (C) void alloc_buffer(uv_handle_t*, size_t size, uv_buf_t* buf) {
 	buf.len = size;
 }
 
-private uv_stream_t* stream(ref uv_tcp_t self) {
+private uv_stream_t* stream(ref uv_tcp_t self) nothrow {
     return cast(uv_stream_t*)&self;
 }
-private uv_handle_t* handle(ref uv_tcp_t self) {
+private uv_handle_t* handle(ref uv_tcp_t self) nothrow {
     return cast(uv_handle_t*)&self;
 }
-private sockaddr* upcast(ref sockaddr_in self) {
+private sockaddr* upcast(ref sockaddr_in self) nothrow {
     return cast(sockaddr*)&self;
 }
 
@@ -42,10 +42,10 @@ public:
 		gcretain(this);
 	}
 
-	Promise!void close() {
-		assert(closePromise is null);
+	Promise!void close() nothrow {
+		if (closePromise) return closePromise;
+
 		closePromise = new Promise!void;
-		scope(failure) closePromise = null;
 		uv_close(self.handle, (selfSelf) {
 			auto self = getSelf!TcpSocket(selfSelf);
 			self.closePromise.resolve();
@@ -62,7 +62,7 @@ public:
 		uv_tcp_bind(&self, addr[0].ai_addr, 0).uvCheck();
 	}
 
-	PromiseIterator!TcpSocket listen(int backlog) {
+	PromiseIterator!TcpSocket listen(int backlog) nothrow {
         import std.algorithm : swap;
 
 		assert(listenPromise is null);
@@ -105,7 +105,7 @@ public:
             }
         }).except((Throwable e) { self.readPromise.reject(e); });
     }
-	PromiseIterator!(const(ubyte)[]) read() {
+	PromiseIterator!(const(ubyte)[]) read() nothrow {
 		import std.algorithm : swap;
 
 		assert(readPromise is null);
@@ -119,7 +119,7 @@ public:
 		return readPromise;
 	}
 
-	Promise!void write(immutable(ubyte)[] data) {
+	Promise!void write(immutable(ubyte)[] data) nothrow {
 		WritePromise r = new WritePromise;
 		gcretain(r);
 		r.data.base = cast(char*)data.ptr;
@@ -133,12 +133,12 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	class WritePromise : Promise!void {
+	private class WritePromise : Promise!void {
 		uv_write_t self;
 		uv_buf_t data;
 	}
 
-	Promise!void shutdown() {
+	Promise!void shutdown() nothrow {
 		ShutdownPromise r = new ShutdownPromise;
 		gcretain(r);
 		int err = uv_shutdown(&r.self, self.stream, (rSelf, status) {
@@ -150,11 +150,11 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	class ShutdownPromise : Promise!void {
+	private class ShutdownPromise : Promise!void {
 		uv_shutdown_t self;
 	}
 
-	Promise!void connect(Addrinfo addrinfo) {
+	Promise!void connect(Addrinfo addrinfo) nothrow {
 		import std.string : toStringz;
 
 		auto addr = addrinfo.get();
@@ -174,7 +174,7 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	class ConnectPromise : Promise!void {
+	private class ConnectPromise : Promise!void {
 		uv_connect_t self;
 	}
 }
