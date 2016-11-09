@@ -1,4 +1,5 @@
 module upromised.tcp;
+import upromised.stream : Stream;
 import upromised.promise : PromiseIterator, Promise;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck;
@@ -26,7 +27,7 @@ private sockaddr* upcast(ref sockaddr_in self) nothrow {
     return cast(sockaddr*)&self;
 }
 
-class TcpSocket {
+class TcpSocket : Stream {
 private:
 	uv_loop_t* ctx;
 	Promise!void closePromise;
@@ -42,7 +43,7 @@ public:
 		gcretain(this);
 	}
 
-	Promise!void close() nothrow {
+	override Promise!void close() nothrow {
 		if (closePromise) return closePromise;
 
 		closePromise = new Promise!void;
@@ -105,7 +106,7 @@ public:
             }
         }).except((Throwable e) { self.readPromise.reject(e); });
     }
-	PromiseIterator!(const(ubyte)[]) read() nothrow {
+	override PromiseIterator!(const(ubyte)[]) read() nothrow {
 		import std.algorithm : swap;
 
 		assert(readPromise is null);
@@ -119,7 +120,7 @@ public:
 		return readPromise;
 	}
 
-	Promise!void write(immutable(ubyte)[] data) nothrow {
+	override Promise!void write(immutable(ubyte)[] data) nothrow {
 		WritePromise r = new WritePromise;
 		gcretain(r);
 		r.data.base = cast(char*)data.ptr;
@@ -138,7 +139,7 @@ public:
 		uv_buf_t data;
 	}
 
-	Promise!void shutdown() nothrow {
+	override Promise!void shutdown() nothrow {
 		ShutdownPromise r = new ShutdownPromise;
 		gcretain(r);
 		int err = uv_shutdown(&r.self, self.stream, (rSelf, status) {
