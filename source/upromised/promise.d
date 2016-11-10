@@ -372,16 +372,18 @@ private:
     }
 
 public:
-    Promise!bool resolve(T a) nothrow {
+    void resolve(T a, Promise!bool r) nothrow {
         import std.typecons : tuple;
 
         assert(!end_);
-        Promise!bool r = new Promise!bool;
         resolved_ ~= tuple(a, Throwable.init, r);
         if (each_ && resolved_.length == 1) {
             resolveOne();
         }
-
+    }
+    Promise!bool resolve(T a) nothrow {
+        Promise!bool r = new Promise!bool;
+        resolve(a, r);
         return r;
     }
 
@@ -411,11 +413,12 @@ public:
     {
         assert(each_ is null);
         eachThen_ = new Promise!bool;
+        auto r = eachThen_;
         each_ = (T t) => eachInvoke(cb, t);
         if (resolved_.length > 0) {
             resolveOne();
         }
-        return eachThen_;
+        return r;
     }
 }
 
@@ -622,5 +625,18 @@ unittest { //Finally returning a value
     });
     assert(!called);
     a.resolve(0);
+    assert(called);
+}
+unittest { //Fail right away
+    auto a = new PromiseIterator!int;
+    auto err = new Exception("yada");
+    bool called = false;
+    a.reject(err);
+    a.each((a) {
+        assert(false);
+    }).except((Exception e) {
+        assert(e is err);
+        called = true;
+    });
     assert(called);
 }

@@ -97,7 +97,8 @@ public:
         if (buf.base !is null) gcrelease(buf.base);
         enforce(nread >= 0);
         uv_read_stop(self.self.stream);
-        self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]).then((cont) {
+		auto late = new Promise!bool;
+        late.then((cont) {
             if (cont) {
                 uv_read_start(self.self.stream, &readAlloc, &readCb).uvCheck();
             } else {
@@ -105,6 +106,7 @@ public:
                 self.readPromise = null;
             }
         }).except((Throwable e) { self.readPromise.reject(e); });
+		self.readPromise.resolve(cast(ubyte[])buf.base[0..nread], late);
     }
 	override PromiseIterator!(const(ubyte)[]) read() nothrow {
 		import std.algorithm : swap;
