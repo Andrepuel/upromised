@@ -1,6 +1,6 @@
 module upromised.tls;
 import deimos.openssl.ssl;
-import upromised.stream : Stream;
+import upromised.stream : Stream, ReadoneStream;
 import upromised.promise : Promise, PromiseIterator;
 import upromised : fatal;
 import std.exception : enforce;
@@ -85,14 +85,13 @@ public:
     }
 }
 
-class TlsStream : Stream {
+class TlsStream : ReadoneStream {
 private:
     Stream underlying;
     TlsContext ctx;
     SSL* ssl;
     BioPair tlsWrite;
     BioPair tlsRead;
-    PromiseIterator!(const(ubyte)[]) readPromise;
     ubyte[] readBuffer;
 
     enum Want : int {
@@ -158,29 +157,7 @@ private:
         return r;
     }
 
-    void readOne() nothrow {
-        import std.algorithm : swap;
-
-        operate!(SSL_read)(readBuffer.ptr, cast(int)readBuffer.length).then((int read) {
-            auto late = new Promise!bool;
-            late.then((cont) {
-                if (cont) {
-                    readOne();
-                } else {
-                    readPromise = null;
-                }
-            }).except((Throwable e) => fatal(e));
-            readPromise.resolve(readBuffer[0..read], late);
-        }).except((Exception e) {
-            PromiseIterator!(const(ubyte)[]) oldReadPromise;
-            swap(oldReadPromise, readPromise);
-            if ((cast(UnderlyingShutdown)e) !is null) {
-                oldReadPromise.resolve();
-            } else {
-                oldReadPromise.reject(e);
-            }
-        }).except((Throwable e) => fatal(e));
-    }
+    
 public:
     this(Stream stream, TlsContext ctx) {
         underlying = stream;
@@ -201,20 +178,26 @@ public:
         return operate!(SSL_write)(data.ptr, cast(int)data.length).then((a) { enforce(a == data.length);});
     }
 
-    override PromiseIterator!(const(ubyte)[]) read() nothrow {
-        assert(readPromise is null);
-        readPromise = new PromiseIterator!(const(ubyte)[]);
-        auto r = readPromise;
-        readOne();
-        return r;
-    }
-
     override Promise!void shutdown() nothrow {
         return operate!(SSL_shutdown,).then((a) => underlying.shutdown);
     }
 
     override Promise!void close() nothrow {
         return underlying.close();
+    }
+protected:
+    override void readOne() nothrow {
+        import std.algorithm : swap;
+
+        operate!(SSL_read)(readBuffer.ptr, cast(int)readBuffer.length).then((int read) {
+            readOneData(readBuffer[0..read]);
+        }).except((Exception e) {
+            if ((cast(UnderlyingShutdown)e) !is null) {
+                readOneData(null);
+            } else {
+                rejectOneData(e);
+            }
+        }).nothrow_();
     }
 }
 
