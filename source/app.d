@@ -33,9 +33,9 @@ int main() {
 				});
 			}).finall(() => clientSide.close())
 			.except((Exception e) => stderr.writeln(e))
-			.except((Throwable e) => fatal(e));
+			.nothrow_();
 		}).finall(() => a.close());
-	})).except((Throwable e) => fatal(e));
+	}))nothrow_();
 
 	return uv_run(loop, uv_run_mode.UV_RUN_DEFAULT);
 }

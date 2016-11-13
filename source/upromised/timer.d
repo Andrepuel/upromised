@@ -48,7 +48,7 @@ public:
                     uv_timer_stop(&self.self);
                     self.startPromise = null;
                 }
-            }).except((Throwable e) => fatal(e));
+            }).nothrow_();
         }, start.total!"msecs", repeat.total!"msecs");
         if (err.uvCheck(startPromise)) {
             startPromise = null;

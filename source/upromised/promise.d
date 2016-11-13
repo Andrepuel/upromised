@@ -2,6 +2,20 @@ module upromised.promise;
 
 import std.format : format;
 
+void fatal(Throwable e = null, string file = __FILE__, ulong line = __LINE__) nothrow {
+    import core.stdc.stdlib : abort;
+    import std.stdio : stderr;
+    try {
+        stderr.writeln("%s(%s): Fatal error".format(file, line));
+        if (e) {
+            stderr.writeln(e);
+        }
+    } catch(Throwable) {
+        abort();
+    }
+    abort();
+}
+
 template Promisify(T) {
     static if (is(T : Promise_)) {
         alias Promisify = T;
@@ -170,6 +184,10 @@ public:
         r.reject(e);
         return r;
     }
+
+    Promise!void nothrow_(string file = __FILE__, ulong line = __LINE__)  nothrow {
+        return except((Throwable e) => fatal(e, file, line));
+    }
 }
 class Promise(T) : PromiseBase!T
 if (!is(T == void))
@@ -215,7 +233,7 @@ unittest { // Void promise
     bool called = false;
     a.then(() {
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.resolve();
     assert(called);
@@ -228,7 +246,7 @@ unittest { // Void Chaining
         sum += a;
     }).then(() {
         sum += 3;
-    });
+    }).nothrow_();
     assert(sum == 0);
     a.resolve(3);
     assert(sum == 6);
@@ -247,7 +265,7 @@ unittest { // Chaining
         return delayed;
     }).then((a) {
         finalValue = a;
-    });
+    }).nothrow_();
     a.resolve(1);
     assert(delayValue == 2);
     assert(finalValue == "");
@@ -262,7 +280,7 @@ unittest { //Exceptions
     a.except((Throwable e) {
         assert(err is e);
         caught = true;
-    });
+    }).nothrow_();
     assert(!caught);
     a.reject(err);
     assert(caught);
@@ -282,7 +300,7 @@ unittest { //Exception chaining
     }).except((Throwable e) {
         assert(e is err);
         caught = true;
-    });
+    }).nothrow_();
     assert(!caught);
     a.reject(err);
     assert(caught);
@@ -298,7 +316,7 @@ unittest {
     }).except((Exception e) {
         assert(e == err);
         caught = true;
-    });
+    }).nothrow_();
     assert(!caught);
     a.resolve(2);
     assert(caught);
@@ -433,7 +451,7 @@ unittest { //Iterator
     }).then((bool) {
         sum = 0;
         return;
-    });
+    }).nothrow_();
     assert(sum == 1);
     a.resolve(2);
     assert(sum == 3);
@@ -449,7 +467,7 @@ unittest { //Iterator catching
     }).except((Exception e) {
         assert(e == err);
         caught = true;
-    });
+    }).nothrow_();
     assert(!caught);
     a.resolve(2);
     assert(caught);
@@ -468,7 +486,7 @@ unittest { //Resolve done Promise
     a.resolve(2).then((a) {
         assert(!a);
         done = true;
-    });
+    }).nothrow_();
     assert(!done);
     a.each((a) {
         return false;
@@ -479,17 +497,17 @@ unittest { //Resolve done Promise
     a.each((a) {
         delayed = new Promise!bool;
         return delayed;
-    });
+    }).nothrow_();
     assert(!done);
     bool done2 = false;
     a.resolve(3).then((a) {
         assert(a);
         done = true;
-    });
+    }).nothrow_();
     a.resolve(4).then((a) {
         assert(!a);
         done2 = true;
-    });
+    }).nothrow_();
     assert(!done);
     assert(!done2);
     delayed.resolve(true);
@@ -515,7 +533,7 @@ unittest { // Rejecting iterator
     }).except((Exception e) {
         assert(err is e);
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.reject(err);
     assert(called);
@@ -530,14 +548,14 @@ unittest { //Resolved and rejected promise constructor
     Promise!int.resolved(3).then((a) {
         assert(a == 3);
         called = true;
-    });
+    }).nothrow_();
     assert(called);
     called = false;
     auto err = new Exception("yada");
     Promise!int.rejected(err).except((Exception e) {
         assert(e is err);
         called = true;
-    });
+    }).nothrow_();
     assert(called);
 }
 unittest { //Finally
@@ -557,7 +575,7 @@ unittest { //Finally
         assert(called[1]);
         called[2] = true;
         assert(e is err);
-    });
+    }).nothrow_();
     assert(!called[0]);
     assert(!called[1]);
     assert(!called[2]);
@@ -577,7 +595,7 @@ unittest { //Finally might throw Exception
     }).except((Exception e) {
         assert(e is err);
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.resolve(2);
     assert(called);
@@ -593,7 +611,7 @@ unittest { //Finally return promise
     }).except((Exception e) {
         assert(err is e);
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.resolve(2);
     assert(called);
@@ -609,7 +627,7 @@ unittest { //Return failed promise
     }).except((Exception e) {
         assert(err is e);
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.resolve(2);
     assert(called);
@@ -622,7 +640,7 @@ unittest { //Finally returning a value
     }).then((a) {
         assert(a == 2);
         called = true;
-    });
+    }).nothrow_();
     assert(!called);
     a.resolve(0);
     assert(called);
@@ -637,6 +655,6 @@ unittest { //Fail right away
     }).except((Exception e) {
         assert(e is err);
         called = true;
-    });
+    }).nothrow_();
     assert(called);
 }

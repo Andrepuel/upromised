@@ -152,7 +152,7 @@ private:
             }).then((repeat) {
                 if (repeat) tryOne();
             }).except((Exception e) => r.reject(e))
-            .except((Throwable e) => fatal(e));
+            .nothrow_();
         };
         tryOne();
         return r;
