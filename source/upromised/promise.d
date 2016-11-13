@@ -435,6 +435,8 @@ public:
         each_ = (T t) => eachInvoke(cb, t);
         if (resolved_.length > 0) {
             resolveOne();
+        } else if (end_) {
+            eachThen_.resolve(true);
         }
         return r;
     }
@@ -654,6 +656,18 @@ unittest { //Fail right away
         assert(false);
     }).except((Exception e) {
         assert(e is err);
+        called = true;
+    }).nothrow_();
+    assert(called);
+}
+unittest { //EOF right away
+    auto a = new PromiseIterator!int;
+    bool called = false;
+    a.resolve();
+    a.each((a) {
+        assert(false);
+    }).then((eof) {
+        assert(eof);
         called = true;
     }).nothrow_();
     assert(called);
