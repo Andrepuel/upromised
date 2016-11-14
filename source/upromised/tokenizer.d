@@ -1,10 +1,6 @@
 module upromised.tokenizer;
-import upromised.stream : ReadoneStream, Stream;
 import upromised.promise : Promise, PromiseIterator;
 import upromised : fatal;
-version (unittest) {
-    import upromised.manual_stream : ManualStream;
-}
 
 private ptrdiff_t countUntilPartial(const(ubyte)[] input, const(ubyte)[] search) nothrow {
     import std.algorithm : startsWith, min;
@@ -15,9 +11,11 @@ private ptrdiff_t countUntilPartial(const(ubyte)[] input, const(ubyte)[] search)
     return -1;
 }
 
-class Tokenizer : ReadoneStream {
+class Tokenizer {
 private:
-    Stream underlying;
+    alias Underlying = PromiseIterator!(const(ubyte)[]);
+    Underlying underlying;
+    Underlying read_;
     bool underlyingEof;
     immutable(ubyte)[] separator_;
     ubyte[] buffer;
@@ -25,7 +23,7 @@ private:
     bool partialReceive_;
 
 public:
-    this(Stream underlying) {
+    this(Underlying underlying) {
         this.underlying = underlying;
     }
 
@@ -39,20 +37,15 @@ public:
         partialReceive_ = partialReceive;
     }
 
-    override Promise!void close() nothrow {
-        return underlying.close();
+    PromiseIterator!(const(ubyte)[]) read() nothrow {
+        if (read_ is null) {
+            read_ = new PromiseIterator!(const(ubyte)[]);
+            readOne();
+        }
+        return read_;
     }
-
-    override Promise!void shutdown() nothrow {
-        return underlying.shutdown();
-    }
-
-    override Promise!void write(immutable(ubyte)[] data) nothrow {
-        return underlying.write(data);
-    }
-
 protected:
-    override void readOne() nothrow {
+    void readOne() nothrow {
         ptrdiff_t posClosed = -1;
         if (separator_.length > 0) {
             posClosed = buffer.countUntilPartial(separator_);
@@ -64,36 +57,40 @@ protected:
             if (posOpen <= buffer.length) {
                 auto output = buffer[0..posOpen];
                 buffer = buffer[posOpen..$];
-                readOneData(output);
+                read_.resolve(output).then((_) => readOne()).nothrow_();
                 return;
             }
             // Found part of the separator on end of buffer
             if (posOpen > buffer.length && partialReceive_ && posClosed > 0) {
                 auto output = buffer[0..posClosed];
                 buffer = buffer[posClosed..$];
-                readOneData(output);
+                read_.resolve(output).then((_) => readOne()).nothrow_();
                 return;
             }
         } else if (limit_ > 0 && buffer.length >= limit_) {
             auto output = buffer[0..limit_];
             buffer = buffer[limit_..$];
-            readOneData(output);
+            read_.resolve(output).then((_) => readOne()).nothrow_();
             return;
         } else if (partialReceive_ && buffer.length > 0) {
             auto output = buffer;
             buffer = null;
-            readOneData(output);
+            read_.resolve(output).then((_) => readOne()).nothrow_();
             return;
         }
 
         if (underlyingEof) {
             auto output = buffer;
             buffer = null;
-            readOneData(output);
+            if (output.length > 0) {
+                read_.resolve(output).then((_) => readOne()).nothrow_();
+            } else {
+                read_.resolve();
+            }
             return;
         }
 
-        underlying.read().each((data) {
+        underlying.each((data) {
             buffer ~= data;
             return false;
         }).then((eof) {
@@ -101,12 +98,12 @@ protected:
         }).then(() {
             readOne();
         }).except((Exception e) {
-            rejectOneData(e);
+            return read_.reject(e).then((_) {});
         }).nothrow_();
     }
 }
 unittest {
-    auto a = new ManualStream;
+    auto a = new PromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer(a);
     bool called = false;
     bool eof = false;
@@ -119,12 +116,12 @@ unittest {
         assert(!eof);
         eof = true;
     }).nothrow_();
-    a.writeToRead(cast(const(ubyte)[])"Hello world");
-    a.writeToRead();
+    a.resolve(cast(const(ubyte)[])"Hello world").nothrow_();
+    a.resolve();
     assert(eof);
 }
 unittest {
-    auto a = new ManualStream;
+    auto a = new PromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer(a);
     b.separator("\r\n");
     b.limit();
@@ -145,13 +142,13 @@ unittest {
     }).then((_) {
         assert(call++ == 3);
     }).nothrow_();
-    a.writeToRead(cast(const(ubyte)[])"\r\nHello\r\nWorld");
+    a.resolve(cast(const(ubyte)[])"\r\nHello\r\nWorld").nothrow_();
     assert(call == 2);
-    a.writeToRead();
+    a.resolve();
     assert(call == 4);
 }
 unittest {
-    auto a = new ManualStream;
+    auto a = new PromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer(a);
     b.separator();
     b.limit(3);
@@ -172,17 +169,17 @@ unittest {
     }).then((_) {
         assert(call++ == 3);
     }).nothrow_();
-    a.writeToRead(cast(const(ubyte)[])"ab");
+    a.resolve(cast(const(ubyte)[])"ab").nothrow_();
     assert(call == 0);
-    a.writeToRead(cast(const(ubyte)[])"cdef");
+    a.resolve(cast(const(ubyte)[])"cdef").nothrow_();
     assert(call == 2);
-    a.writeToRead(cast(const(ubyte)[])"gh");
+    a.resolve(cast(const(ubyte)[])"gh").nothrow_();
     assert(call == 2);
-    a.writeToRead();
+    a.resolve();
     assert(call == 4);
 }
 unittest {
-    auto a = new ManualStream;
+    auto a = new PromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer(a);
     b.separator();
     b.limit(3);
@@ -204,13 +201,13 @@ unittest {
         assert(e is err);
         call++;
     }).nothrow_();
-    a.writeToRead(cast(const(ubyte)[])"abcdefgh");
+    a.resolve(cast(const(ubyte)[])"abcdefgh").nothrow_();
     assert(call == 2);
-    a.writeToRead(err);
+    a.reject(err).nothrow_();
     assert(call == 3);
 }
 unittest {
-    auto a = new ManualStream;
+    auto a = new PromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer(a);
     b.separator("ABCD");
     b.limit();
@@ -256,22 +253,22 @@ unittest {
         assert(eof);
         assert(call++ == 10);
     }).nothrow_();
-    a.writeToRead(cast(const(ubyte)[])"abc").nothrow_();
+    a.resolve(cast(const(ubyte)[])"abc").nothrow_();
     assert(call == 1);
-    a.writeToRead(cast(const(ubyte)[])"abcABCDabc").nothrow_();
+    a.resolve(cast(const(ubyte)[])"abcABCDabc").nothrow_();
     assert(call == 3);
     b.separator();
     b.limit(3);
-    a.writeToRead(cast(const(ubyte)[])"abcdef").nothrow_();
+    a.resolve(cast(const(ubyte)[])"abcdef").nothrow_();
     assert(call == 5);
     b.separator("ABCD");
     b.limit();
-    a.writeToRead(cast(const(ubyte)[])"abAB");
+    a.resolve(cast(const(ubyte)[])"abAB").nothrow_();
     assert(call == 6);
-    a.writeToRead(cast(const(ubyte)[])"abAB");
+    a.resolve(cast(const(ubyte)[])"abAB").nothrow_();
     assert(call == 7);
-    a.writeToRead(cast(const(ubyte)[])"CDabAB");
+    a.resolve(cast(const(ubyte)[])"CDabAB").nothrow_();
     assert(call == 9);
-    a.writeToRead();
+    a.resolve();
     assert(call == 11);
 }
