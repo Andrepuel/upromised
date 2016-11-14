@@ -35,7 +35,7 @@ int main() {
 			.except((Exception e) => stderr.writeln(e))
 			.nothrow_();
 		}).finall(() => a.close());
-	}))nothrow_();
+	})).nothrow_();
 
 	return uv_run(loop, uv_run_mode.UV_RUN_DEFAULT);
 }
