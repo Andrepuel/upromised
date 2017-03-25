@@ -1,4 +1,5 @@
 module upromised.uv;
+import deimos.libuv.uv;
 import upromised.promise : Promise, PromiseIterator;
 import std.format : format;
 import upromised : fatal;
@@ -31,4 +32,18 @@ bool uvCheck(T)(int r, PromiseIterator!T t) nothrow {
         return true;
     }
     return false;
+}
+
+public uv_stream_t* stream(ref uv_tcp_t self) nothrow {
+	return cast(uv_stream_t*)&self;
+}
+public uv_handle_t* handle(ref uv_tcp_t self) nothrow {
+	return cast(uv_handle_t*)&self;
+}
+
+public uv_stream_t* stream(ref uv_tty_t self) nothrow {
+	return cast(uv_stream_t*)&self;
+}
+public uv_handle_t* handle(ref uv_tty_t self) nothrow {
+	return cast(uv_handle_t*)&self;
 }
