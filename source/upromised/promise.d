@@ -354,9 +354,8 @@ private:
     }
 
     void popResolved(bool cont) nothrow {
-        Promise!bool resolvedPromise = resolved_[0][2];
+        resolved_[0][2].resolve(cont);
         resolved_ = resolved_[1..$];
-        resolvedPromise.resolve(cont);
     }
 
     void resolveOne() nothrow {
@@ -671,4 +670,32 @@ unittest { //EOF right away
         called = true;
     }).nothrow_();
     assert(called);
+}
+unittest { // Ones might re-resolve right away
+    auto a = new PromiseIterator!int;
+    int calls = 0;
+    auto cont_delay = new Promise!bool;
+    
+    a.resolve(0).then((cont) {
+        a.resolve(1);
+    }).nothrow_();
+
+    a.each((b) {
+        assert(b == calls);
+        calls++;
+
+        if (b == 0) {
+            return Promise!bool.resolved(true);
+        } else {
+            return cont_delay;
+        }
+    }).then((eof) {
+        assert(eof);
+        assert(calls == 2);   
+        calls++;
+    }).nothrow_();
+
+    a.resolve();
+    assert(calls == 2);
+    cont_delay.resolve(true);
 }
