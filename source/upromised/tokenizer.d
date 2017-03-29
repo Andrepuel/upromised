@@ -1,5 +1,6 @@
 module upromised.tokenizer;
 import upromised.promise : Promise, PromiseIterator;
+import upromised.stream : Stream;
 import upromised : fatal;
 
 private ptrdiff_t countUntilPartial(const(ubyte)[] input, const(ubyte)[] search) nothrow {
@@ -11,14 +12,14 @@ private ptrdiff_t countUntilPartial(const(ubyte)[] input, const(ubyte)[] search)
     return -1;
 }
 
-class Tokenizer {
+class Tokenizer(T) {
 private:
-    alias Underlying = PromiseIterator!(const(ubyte)[]);
+    alias Underlying = PromiseIterator!(T[]);
     Underlying underlying;
     Underlying read_;
     bool underlyingEof;
-    immutable(ubyte)[] separator_;
-    ubyte[] buffer;
+    T[] separator_;
+    T[] buffer;
     size_t limit_;
     bool partialReceive_;
 
@@ -28,7 +29,7 @@ public:
     }
 
     void separator(immutable(void)[] separator = null) nothrow {
-        separator_ = cast(immutable(ubyte)[])separator;
+        separator_ = cast(immutable(T)[])separator;
     }
     void limit(size_t limit = 0) nothrow {
         limit_ = limit;
@@ -37,13 +38,14 @@ public:
         partialReceive_ = partialReceive;
     }
 
-    PromiseIterator!(const(ubyte)[]) read() nothrow {
+    PromiseIterator!(T[]) read() nothrow {
         if (read_ is null) {
-            read_ = new PromiseIterator!(const(ubyte)[]);
+            read_ = new PromiseIterator!(T[]);
             readOne();
         }
         return read_;
     }
+
 protected:
     void readOne() nothrow {
         ptrdiff_t posClosed = -1;
@@ -104,7 +106,7 @@ protected:
 }
 unittest {
     auto a = new PromiseIterator!(const(ubyte)[]);
-    auto b = new Tokenizer(a);
+    auto b = new Tokenizer!(const(ubyte))(a);
     bool called = false;
     bool eof = false;
     b.read().each((data) {
@@ -122,7 +124,7 @@ unittest {
 }
 unittest {
     auto a = new PromiseIterator!(const(ubyte)[]);
-    auto b = new Tokenizer(a);
+    auto b = new Tokenizer!(const(ubyte))(a);
     b.separator("\r\n");
     b.limit();
     int call = 0;
@@ -149,7 +151,7 @@ unittest {
 }
 unittest {
     auto a = new PromiseIterator!(const(ubyte)[]);
-    auto b = new Tokenizer(a);
+    auto b = new Tokenizer!(const(ubyte))(a);
     b.separator();
     b.limit(3);
     int call = 0;
@@ -180,7 +182,7 @@ unittest {
 }
 unittest {
     auto a = new PromiseIterator!(const(ubyte)[]);
-    auto b = new Tokenizer(a);
+    auto b = new Tokenizer!(const(ubyte))(a);
     b.separator();
     b.limit(3);
     auto err = new Exception("yada");
@@ -208,7 +210,7 @@ unittest {
 }
 unittest {
     auto a = new PromiseIterator!(const(ubyte)[]);
-    auto b = new Tokenizer(a);
+    auto b = new Tokenizer!(const(ubyte))(a);
     b.separator("ABCD");
     b.limit();
     b.partialReceive(true);
@@ -234,8 +236,6 @@ unittest {
             assert(data == "ab");
             break;
         case 6:
-            debug import std.stdio;
-            debug writeln(cast(const(char)[])data);
             assert(data == "ABab");
             break;
         case 7:

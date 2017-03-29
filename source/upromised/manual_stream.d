@@ -17,6 +17,7 @@ public:
     }
 
     override Promise!void shutdown() nothrow {
+        write_.resolve();
         return Promise!void.resolved();
     }
 
@@ -116,4 +117,22 @@ unittest {
     assert(!called);
     a.writeToRead();
     assert(called);
+}
+unittest {
+    auto a = new ManualStream;
+    int calls = 0;
+
+    a.readFromWrite().each((_) {
+        assert(calls++ == 0);
+        return true;
+    }).then((eof) {
+        assert(eof);
+        assert(calls++ == 1);
+    }).nothrow_();
+
+    assert(calls == 0);
+    a.write(cast(immutable(ubyte)[])"yada");
+    assert(calls == 1);
+    a.shutdown();
+    assert(calls == 2);
 }
