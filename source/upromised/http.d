@@ -1,10 +1,11 @@
 module upromised.http;
+import std.exception : enforce;
 import std.format : format;
 import upromised.manual_stream : ManualStream;
 import upromised.operations : readAllChunks;
 import upromised.promise : Promise, PromiseIterator;
 import upromised.stream : Stream;
-import std.format : format;
+import upromised.tokenizer : Tokenizer;
 
 struct Header {
 	string key;
@@ -15,16 +16,26 @@ enum Method {
 	GET, POST, PUT, DELETE
 }
 
+struct Response {
+	int statusCode;
+	string statusLine;
+}
+
 private inout(Y)[] as(Y, T)(inout(T) input) {
 	return cast(inout(Y)[])input;
 }
 
-PromiseIterator!(const(ubyte)[]) decodeChunked(PromiseIterator!(const(ubyte)[]) chunked) {
+PromiseIterator!(const(ubyte)[]) decodeChunked(PromiseIterator!(const(ubyte)[]) chunked) nothrow {
+	return decodeChunked(new Tokenizer!(const(ubyte))(chunked));
+}
+
+PromiseIterator!(const(ubyte)[]) decodeChunked(Tokenizer!(const(ubyte)) tokenizer) nothrow {
 	import std.conv : to;
-	import upromised.tokenizer : Tokenizer;
 
 	auto r = new PromiseIterator!(const(ubyte)[]);
-	auto tokenizer = new Tokenizer!(const(ubyte))(chunked);
+	
+	tokenizer.partialReceive();
+	tokenizer.limit();
 	tokenizer.separator("\r\n");
 
 	size_t chunkSize;
@@ -83,34 +94,53 @@ unittest {
 
 class Client {
 private:
-	PromiseIterator!(immutable(ubyte)[]) output;
+	import upromised.tokenizer : Tokenizer;
+
 	size_t contentLength;
+	bool chunked;
+	Tokenizer!(const(ubyte)) inputTokenizer;
 
 public:
-	this() {
+	PromiseIterator!(immutable(ubyte)[]) output;
+	PromiseIterator!(const(ubyte)[]) input;
+
+	this() nothrow {
 		output = new PromiseIterator!(immutable(ubyte)[]);
+		input = new PromiseIterator!(const(ubyte)[]);
+		inputTokenizer = new Tokenizer!(const(ubyte))(this.input);
 	}
 	
-	this(Stream stream) {
+	this(Stream stream) nothrow {
 		this();
 		this.stream = stream;
 	}
 
-	Promise!void stream(Stream stream) {
-		return output.each((data) => stream.write(data)).then((_) {});
+	Promise!void stream(Stream stream) nothrow {
+		auto inputFlow = stream
+			.read()
+			.each((data) => input.resolve(data).then((_) {}))
+			.then((_) => input.resolve())
+			.except((Exception e) { input.reject(e); })
+			.nothrow_();
+
+		return output
+			.each((data) => stream.write(data))
+			.then((_) => inputFlow);
 	}
 
-	Promise!void sendRequest(Method method, string uri) {
-		return output.resolve("%s %s HTTP/1.1\r\n".format(method, uri).as!ubyte).then((_) {});
+	Promise!void sendRequest(Method method, string uri) nothrow {
+		return Promise!void.resolved()
+			.then(() => output.resolve("%s %s HTTP/1.1\r\n".format(method, uri).as!ubyte))
+			.then((_) {});
 	}
 
-	Promise!void sendHeaders(Header[] headers) {
+	Promise!void sendHeaders(Header[] headers) nothrow {
 		import upromised.operations : toAsync;
 
 		return sendHeaders(headers.toAsync);
 	}
 
-	Promise!void sendHeaders(PromiseIterator!Header headers) {
+	Promise!void sendHeaders(PromiseIterator!Header headers) nothrow {
 		import std.conv : to;
 
 		return headers.each((header) {
@@ -122,17 +152,17 @@ public:
 		}).then((_) {});
 	}
 
-	Promise!void sendBody() {
+	Promise!void sendBody() nothrow {
 		return output.resolve("\r\n".as!ubyte).then((_) {});
 	}
 
-	Promise!void sendBody(immutable(ubyte)[] data) {
+	Promise!void sendBody(immutable(ubyte)[] data) nothrow {
 		import upromised.operations : toAsyncChunks;
 
 		return sendBody(data.toAsyncChunks);
 	}
 
-	Promise!void sendBody(PromiseIterator!(immutable(ubyte)[]) dataArg) {
+	Promise!void sendBody(PromiseIterator!(immutable(ubyte)[]) dataArg) nothrow {
 		import upromised.tokenizer : Tokenizer;
 
 		if (contentLength > 0) {
@@ -157,6 +187,78 @@ public:
 				return output.resolve("0\r\n\r\n".as!ubyte);
 			}).then((_) {});
 		}
+	}
+
+	Promise!Response fetchResponse() nothrow {
+		import std.array : join;
+		import std.conv : to;
+		import std.string : split;
+
+		contentLength = 0;
+		chunked = false;
+
+		inputTokenizer.partialReceive();
+		inputTokenizer.limit();
+		inputTokenizer.separator("\r\n");
+
+		Response r;
+		return inputTokenizer.read().each((response) {
+			const(char)[][] responseParts = response.as!char[0..$-2].split(" ");
+			enforce(responseParts.length > 2);
+			enforce(responseParts[0] == "HTTP/1.1");
+			r.statusCode = responseParts[1].to!int;
+			r.statusLine = responseParts[2..$].join(" ").idup;
+			return false;
+		}).then((_) => r);
+	}
+
+	PromiseIterator!Header fetchHeaders() nothrow {
+		import std.algorithm : countUntil;
+		import std.conv : to;
+
+		inputTokenizer.partialReceive();
+		inputTokenizer.limit();
+		inputTokenizer.separator("\r\n");
+
+		auto r = new PromiseIterator!Header;
+		inputTokenizer.read().each((headerLine) {
+			if (headerLine.as!char == "\r\n") {
+				return Promise!bool.resolved(false);
+			}
+
+			auto pos = headerLine.as!char.countUntil(": ");
+			Header header = Header(headerLine.as!char[0..pos], headerLine.as!char[pos + 2..$-2]);
+			
+			if (header.key == "Content-Length") {
+				contentLength = header.value.to!size_t;
+			}
+
+			if (header.key == "Transfer-Encoding" && header.value == "chunked") {
+				chunked = true;
+			}
+
+			return r.resolve(header);
+		}).then((_) => r.resolve()).except((Exception e) { r.reject(e); });
+		return r;
+	}
+
+	PromiseIterator!(const(ubyte)[]) fetchBody() nothrow {
+		if (chunked) {
+			return decodeChunked(inputTokenizer);
+		}
+		
+		inputTokenizer.partialReceive(true);
+		inputTokenizer.limit(contentLength);
+		inputTokenizer.separator();
+
+		auto r = new PromiseIterator!(const(ubyte)[]);
+		inputTokenizer.read().each((chunk) {
+			contentLength -= chunk.length;
+			inputTokenizer.limit(contentLength);
+			return r.resolve(chunk).then((_) => contentLength > 0);
+		}).then((_) => r.resolve()).except((Exception e) { r.reject(e); });
+
+		return r;
 	}
 }
 unittest {
@@ -259,4 +361,151 @@ unittest {
 		.readAllChunks.then((data) => body_ = data);
 
 	assert(body_ == "supasupa", "%s unexpected".format([cast(const(char)[])request]));
+}
+unittest {
+	import upromised.operations : toAsyncChunks, readAll;
+
+	string responseData = 
+	"HTTP/1.1 301 Moved Permanently\r\n" ~
+	"Date: Thu, 30 Mar 2017 17:02:29 GMT\r\n" ~
+	"Set-Cookie: WMF-Last-Access=30-Mar-2017;Path=/;HttpOnly;secure;Expires=Mon, 01 May 2017 12:00:00 GMT\r\n" ~
+	"Set-Cookie: WMF-Last-Access-Global=30-Mar-2017;Path=/;Domain=.wikipedia.org;HttpOnly;secure;Expires=Mon, 01 May 2017 12:00:00 GMT\r\n" ~
+	"Location: https://en.wikipedia.org/\r\n" ~
+	"Content-Length: 0\r\n\r\n";
+
+	Response response;
+	Header[] headers;
+	const(ubyte)[] data;
+
+	auto a = new ManualStream;
+	auto client = new Client(a);
+
+	client
+		.fetchResponse
+		.then((responseArg) { response = responseArg; } )
+		.then(() => client.fetchHeaders().readAll())
+		.then((headersArg) { headers = headersArg; })
+		.then(() => client.fetchBody().readAllChunks())
+		.then((dataArg) { data = dataArg;})
+		.nothrow_();
+
+	responseData
+		.as!ubyte
+		.toAsyncChunks(13)
+		.each((chunk) => a.writeToRead(chunk))
+		.then((_) => a.writeToRead())
+		.nothrow_();
+
+	assert(response.statusCode == 301);
+	assert(response.statusLine == "Moved Permanently");
+	assert(headers[0] == Header("Date", "Thu, 30 Mar 2017 17:02:29 GMT"));
+	assert(headers[1] == Header("Set-Cookie", "WMF-Last-Access=30-Mar-2017;Path=/;HttpOnly;secure;Expires=Mon, 01 May 2017 12:00:00 GMT"));
+	assert(headers[2] == Header("Set-Cookie", "WMF-Last-Access-Global=30-Mar-2017;Path=/;Domain=.wikipedia.org;HttpOnly;secure;Expires=Mon, 01 May 2017 12:00:00 GMT"));
+	assert(headers[3] == Header("Location", "https://en.wikipedia.org/"));
+	assert(headers[4] == Header("Content-Length", "0"));
+	assert(headers.length == 5);
+	assert(data.length == 0);
+}
+unittest {
+	import upromised.operations : toAsyncChunks, readAll;
+
+	string responseData = 
+	"HTTP/1.1 200 OK\r\n" ~
+	"Server: nginx\r\n" ~
+	"Date: Thu, 30 Mar 2017 22:32:32 GMT\r\n" ~
+	"Content-Type: text/plain; charset=UTF-8\r\n" ~
+	"Content-Length: 15\r\n" ~
+	"Connection: close\r\n" ~
+	"Access-Control-Allow-Origin: *\r\n" ~
+	"Access-Control-Allow-Methods: GET\r\n" ~
+	"\r\n" ~
+	"192.30.253.112\n";
+
+	Response response;
+	Header[] headers;
+	const(ubyte)[] data;
+
+	auto a = new ManualStream;
+	auto client = new Client(a);
+
+	client
+		.fetchResponse
+		.then((responseArg) { response = responseArg; } )
+		.then(() => client.fetchHeaders().readAll())
+		.then((headersArg) { headers = headersArg; })
+		.then(() => client.fetchBody().readAllChunks())
+		.then((dataArg) { data = dataArg;})
+		.nothrow_();
+
+	responseData
+		.as!ubyte
+		.toAsyncChunks(11)
+		.each((chunk) => a.writeToRead(chunk))
+		.then((_) => a.writeToRead())
+		.nothrow_();
+
+	assert(response.statusCode == 200);
+	assert(response.statusLine == "OK");
+	assert(headers[0] == Header("Server", "nginx"));
+	assert(headers[1] == Header("Date", "Thu, 30 Mar 2017 22:32:32 GMT"));
+	assert(headers[2] == Header("Content-Type", "text/plain; charset=UTF-8"));
+	assert(headers[3] == Header("Content-Length", "15"));
+	assert(headers[4] == Header("Connection", "close"));
+	assert(headers[5] == Header("Access-Control-Allow-Origin", "*"));
+	assert(headers[6] == Header("Access-Control-Allow-Methods", "GET"));
+	assert(headers.length == 7);
+	assert(data == "192.30.253.112\n");
+}
+unittest {
+	import upromised.operations : toAsyncChunks, readAll;
+
+	string responseData = 
+	"HTTP/1.1 200 OK\r\n" ~
+	"Date: Thu, 30 Mar 2017 23:24:14 GMT\r\n" ~
+	"Content-Type: text/plain;charset=utf-8\r\n" ~
+	"Transfer-Encoding: chunked\r\n" ~
+	"Connection: keep-alive\r\n" ~
+	"Pragma: no-cache\r\n" ~
+	"Vary: Accept-Encoding\r\n" ~
+	"Server: cloudflare-nginx\r\n" ~
+	"\r\n" ~
+	"14\r\n" ~
+	"6\n5\n3\n1\n1\n2\n4\n3\n3\n6\n\r\n" ~
+	"0\r\n" ~
+	"\r\n";
+
+Response response;
+	Header[] headers;
+	const(ubyte)[] data;
+
+	auto a = new ManualStream;
+	auto client = new Client(a);
+
+	client
+		.fetchResponse
+		.then((responseArg) { response = responseArg; } )
+		.then(() => client.fetchHeaders().readAll())
+		.then((headersArg) { headers = headersArg; })
+		.then(() => client.fetchBody().readAllChunks())
+		.then((dataArg) { data = dataArg;})
+		.nothrow_();
+
+	responseData
+		.as!ubyte
+		.toAsyncChunks(11)
+		.each((chunk) => a.writeToRead(chunk))
+		.then((_) => a.writeToRead())
+		.nothrow_();
+
+	assert(response.statusCode == 200);
+	assert(response.statusLine == "OK");
+	assert(headers[0] == Header("Date", "Thu, 30 Mar 2017 23:24:14 GMT"));
+	assert(headers[1] == Header("Content-Type", "text/plain;charset=utf-8"));
+	assert(headers[2] == Header("Transfer-Encoding", "chunked"));
+	assert(headers[3] == Header("Connection", "keep-alive"));
+	assert(headers[4] == Header("Pragma", "no-cache"));
+	assert(headers[5] == Header("Vary", "Accept-Encoding"));
+	assert(headers[6] == Header("Server", "cloudflare-nginx"));
+	assert(headers.length == 7);
+	assert(data == "6\n5\n3\n1\n1\n2\n4\n3\n3\n6\n");
 }

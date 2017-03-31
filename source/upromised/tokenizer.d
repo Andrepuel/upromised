@@ -24,7 +24,7 @@ private:
     bool partialReceive_;
 
 public:
-    this(Underlying underlying) {
+    this(Underlying underlying) nothrow {
         this.underlying = underlying;
     }
 
@@ -34,7 +34,7 @@ public:
     void limit(size_t limit = 0) nothrow {
         limit_ = limit;
     }
-    void partialReceive(bool partialReceive = false) {
+    void partialReceive(bool partialReceive = false) nothrow {
         partialReceive_ = partialReceive;
     }
 

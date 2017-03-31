@@ -3,18 +3,22 @@ import std.array : empty, front, popFront;
 import std.range : isInputRange;
 import upromised.promise : Promise, PromiseIterator;
 
-PromiseIterator!(typeof(T.init.front)) toAsync(T)(T input)
+PromiseIterator!(typeof(T.init.front)) toAsync(T)(T input) nothrow
 if (isInputRange!T)
 {
 	auto r = new PromiseIterator!(typeof(T.init.front));
-	void delegate(bool) next;
-	next = (bool) {
-		if (input.empty) {
-			r.resolve();
-		} else {
-			const auto value = input.front;
-			input.popFront;
-			r.resolve(value).then(next);
+	void delegate(bool) nothrow next;
+	next = (bool) nothrow {
+		try {
+			if (input.empty) {
+				r.resolve();
+			} else {
+				const auto value = input.front;
+				input.popFront;
+				r.resolve(value).then(next);
+			}
+		} catch(Exception e) {
+			r.reject(e);
 		}
 	};
 
@@ -66,13 +70,13 @@ unittest {
 
 	assert(calls == 5);
 }
-PromiseIterator!(T[]) toAsyncChunks(T)(T[] input, size_t chunkLength = 1024) {
+PromiseIterator!(T[]) toAsyncChunks(T)(T[] input, size_t chunkLength = 1024) nothrow {
 	import std.algorithm : min;
 
 	auto r = new PromiseIterator!(T[]);
 
-	void delegate(bool) next;
-	next = (bool) {
+	void delegate(bool) nothrow next;
+	next = (bool) nothrow {
 		if (input.length == 0) {
 			r.resolve();
 		} else {
@@ -103,7 +107,7 @@ unittest {
 	assert(calls == 4);
 }
 
-Promise!(T[]) readAll(T)(PromiseIterator!T input) {
+Promise!(T[]) readAll(T)(PromiseIterator!T input) nothrow {
 	T[] r;
 	return input.each((value) {
 		r ~= value;
@@ -118,7 +122,7 @@ unittest {
 	assert(all == [1, 2, 3]);
 }
 
-Promise!(T[]) readAllChunks(T)(PromiseIterator!(T[]) input) {
+Promise!(T[]) readAllChunks(T)(PromiseIterator!(T[]) input) nothrow {
 	T[] r;
 	return input.each((value) {
 		r ~= value;
