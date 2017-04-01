@@ -5,12 +5,14 @@ import std.format : format;
 import upromised : fatal;
 
 class UvError : Exception {
+	import std.string : fromStringz;
+
 	this(int code) nothrow {
-        try {
-            super("UV error code %s".format(-code));
-        } catch(Throwable e) {
-            fatal(e);
-        }
+		try {
+			super("UV error (%s) %s".format(uv_strerror(code).fromStringz, code));
+		} catch(Throwable e) {
+			fatal(e);
+		}
 	}
 }
 
