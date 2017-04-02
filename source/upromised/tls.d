@@ -1,4 +1,5 @@
 module upromised.tls;
+version (hasOpenssl):
 import deimos.openssl.ssl;
 import upromised.stream : Stream, ReadoneStream;
 import upromised.promise : Promise, PromiseIterator;

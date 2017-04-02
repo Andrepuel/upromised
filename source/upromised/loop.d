@@ -13,6 +13,7 @@ struct TlsContext {
 interface Loop {
 	Promise!Address resolve(const(char)[] hostname, ushort port) nothrow;
 	Promise!Stream connectTcp(Address dns) nothrow;
+	string defaultCertificatesPath() nothrow;
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
 	int run();
@@ -52,31 +53,76 @@ Loop defaultLoop() {
 				});
 		}
 
-		override Promise!TlsContext context(string certificatesPath = null) nothrow {
-			import upromised.tls : OpensslTlsContext =  TlsContext;
+		override string defaultCertificatesPath() nothrow {
+			version(hasOpenssl) {
+					import std.algorithm : filter;
+					import std.file : exists;
 
-			return Promise!void.resolved()
-				.then(() => new OpensslTlsContext)
-				.then((r) {
-					if (certificatesPath) {
-						r.load_verify_locations(certificatesPath);
+					auto tries = [
+						"/etc/ssl/ca-bundle.pem",
+						"/etc/ssl/certs/ca-certificates.crt",
+						"/etc/pki/tls/certs/ca-bundle.crt",
+						"/usr/local/etc/openssl/cert.pem",
+					].filter!(x => x.exists);
+
+					if (tries.empty) {
+						return null;
 					}
 
-					return TlsContext(r);
-				});
+					return tries.front;
+			} else {
+				return null;
+			}
+		}
+
+		override Promise!TlsContext context(string certificatesPath = null) nothrow {
+			version(hasOpenssl) {
+				import upromised.tls : OpensslTlsContext =  TlsContext;
+
+				return Promise!void.resolved()
+					.then(() => new OpensslTlsContext)
+					.then((r) {
+						if (certificatesPath) {
+							r.load_verify_locations(certificatesPath);
+						}
+
+						return TlsContext(r);
+					});
+			} else version(hasSecurity) {
+				return Promise!TlsContext.resolved(TlsContext.init);
+			} else {
+				auto r = new Promise!TlsContext;
+				r.reject(new Exception("TLS not supported"));
+				return r;
+			}
 		}
 
 		override Promise!Stream tlsHandshake(Stream stream, TlsContext contextUntyped, string hostname) nothrow {
-			import upromised.tls : OpensslTlsContext =  TlsContext, TlsStream;
+			version(hasOpenssl) {
+				import upromised.tls : OpensslTlsContext =  TlsContext, TlsStream;
 
-			OpensslTlsContext context = cast(OpensslTlsContext)(contextUntyped.self);
-			return Promise!void.resolved()
-				.then(() => new TlsStream(stream, context))
-				.then((r) {
-					return r
-						.connect(hostname)
-						.then!Stream(() => r);
-				});
+				OpensslTlsContext context = cast(OpensslTlsContext)(contextUntyped.self);
+				return Promise!void.resolved()
+					.then(() => new TlsStream(stream, context))
+					.then((r) {
+						return r
+							.connect(hostname)
+							.then!Stream(() => r);
+					});
+			} else version(hasSecurity) {
+				import upromised.security : TlsStream;
+				return Promise!void.resolved()
+					.then(() => new TlsStream(stream))
+					.then((r) {
+						return r
+							.connect(hostname)
+							.then!Stream(() => r);
+					});
+			} else {
+				auto r = new Promise!Stream;
+				r.reject(new Exception("TLS not supported"));
+				return r;
+			}
 		}
 	};
 }
