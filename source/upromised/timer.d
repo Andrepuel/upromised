@@ -1,5 +1,6 @@
 module upromised.timer;
 import deimos.libuv.uv : uv_timer_t, uv_handle_t, uv_loop_t, uv_timer_init, uv_timer_start, uv_timer_stop, uv_close, uv_timer_get_repeat;
+import upromised.loop : Loop;
 import upromised.promise : Promise, PromiseIterator;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck;
@@ -15,6 +16,10 @@ public:
     uv_timer_t self;
     Promise!void closePromise;
     PromiseIterator!int startPromise;
+
+    this(Loop loop) {
+        this(cast(uv_loop_t*)loop.inner());
+    }
 
     this(uv_loop_t* ctx) {
         uv_timer_init(ctx, &self).uvCheck();

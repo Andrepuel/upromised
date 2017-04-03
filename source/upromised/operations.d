@@ -13,7 +13,7 @@ if (isInputRange!T)
 			if (input.empty) {
 				r.resolve();
 			} else {
-				const auto value = input.front;
+				auto value = input.front;
 				input.popFront;
 				r.resolve(value).then(next);
 			}

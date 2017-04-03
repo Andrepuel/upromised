@@ -16,6 +16,7 @@ interface Loop {
 	string defaultCertificatesPath() nothrow;
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
+	void* inner() nothrow;
 	int run();
 }
 
@@ -23,7 +24,11 @@ Loop defaultLoop() {
 	import deimos.libuv.uv : uv_default_loop, uv_loop_t;
 	uv_loop_t* loop = uv_default_loop();
 	return new class Loop {
-		int run() {
+		override void* inner() nothrow {
+			return loop;
+		}
+
+		override int run() {
 			import deimos.libuv.uv : uv_run, uv_run_mode;
 
 			return uv_run(loop, uv_run_mode.UV_RUN_DEFAULT);
