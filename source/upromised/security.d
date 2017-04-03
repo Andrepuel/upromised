@@ -44,7 +44,7 @@ class OSStatusError : Exception {
 	}
 }
 
-private Promise!T readOne(T)(PromiseIterator!T read) {
+private Promise!T readOne(T)(PromiseIterator!T read) nothrow {
 	T r;
 	return read.each((chunk) {
 		r = chunk;
@@ -85,9 +85,9 @@ private:
 		return OSStatus.noErr;
 	}
 
-	Promise!OSStatus tryOperate(alias f, Args...)(Args args) nothrow {
+	Promise!OSStatus tryOperate(alias f, Args...)(size_t* operated, Args args) nothrow {
 		OSStatus r = f(args);
-		if (r == OSStatus.noErr) {
+		if (r == OSStatus.noErr || (operated !is null && *operated > 0)) {
 			return (pendingWrite is null ? Promise!void.resolved() : pendingWrite).then(() {
 				pendingWrite = null;
 				return r;
@@ -112,7 +112,7 @@ private:
 	}
 
 	Promise!OSStatus operate(alias f, Args...)(Args args) {
-		return tryOperate!f(args).then((r) {
+		return tryOperate!f(null, args).then((r) {
 			if (r == OSStatus.errSSLWouldBlock) {
 				return operate!f(args);
 			}
@@ -165,7 +165,7 @@ public:
 		}
 		
 		size_t processed;
-		return tryOperate!SSLWrite(context, data.ptr, data.length, &processed).then((status) {
+		return tryOperate!SSLWrite(&processed, context, data.ptr, data.length, &processed).then((status) {
 			if (status != OSStatus.noErr && status != OSStatus.errSSLWouldBlock) {
 				throw new OSStatusError(status);
 			}
@@ -186,7 +186,7 @@ protected:
 
 	Promise!(const(ubyte)[]) readOne(ubyte[] data) nothrow {
 		size_t processed;
-		return operate!SSLRead(context, data.ptr, data.length, &processed).then((status) {
+		return tryOperate!SSLRead(&processed, context, data.ptr, data.length, &processed).then((status) {
 			if (status != OSStatus.noErr && status != OSStatus.errSSLWouldBlock) {
 				throw new OSStatusError(status);
 			}
