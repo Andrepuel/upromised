@@ -2,7 +2,7 @@ module upromised.tcp;
 import upromised.stream : Stream;
 import upromised.promise : PromiseIterator, Promise;
 import upromised.memory : getSelf, gcretain, gcrelease;
-import upromised.uv : uvCheck;
+import upromised.uv : uvCheck, UvError;
 import upromised.uv_stream : UvStream;
 import upromised : fatal;
 import upromised.dns : Addrinfo;
@@ -45,12 +45,19 @@ public:
 
 		assert(listenPromise is null);
 		listenPromise = new PromiseIterator!TcpSocket;
-		auto err = uv_listen(self.stream, backlog, (selfSelf, status) {
-			enforce(status == 0);
-			auto self = getSelf!TcpSocket(selfSelf);
-			auto conn = new TcpSocket(self.ctx);
-			uv_accept(self.self.stream, conn.self.stream).uvCheck();
-			self.listenPromise.resolve(conn);
+		auto err = uv_listen(self.stream, backlog, (selfSelf, status) nothrow {
+			Promise!void.resolved().then(() {
+				auto self = getSelf!TcpSocket(selfSelf);
+				enforce(status == 0);
+				auto conn = new TcpSocket(self.ctx);
+				uv_accept(self.self.stream, conn.self.stream).uvCheck();
+				self.listenPromise.resolve(conn);
+			}).except((Exception e) {
+				auto self = getSelf!TcpSocket(selfSelf);
+				PromiseIterator!TcpSocket failed;
+				swap(failed, self.listenPromise);
+				failed.reject(e);
+			}).nothrow_();
 		});
         if (err.uvCheck(listenPromise)) {
             PromiseIterator!TcpSocket r;
@@ -71,10 +78,13 @@ public:
 		ConnectPromise r = new ConnectPromise;
 		gcretain(r);
 		scope(failure) gcrelease(r);
-		int err = uv_tcp_connect(&r.self, &self, addr[0].ai_addr, (rSelf, status) {
+		int err = uv_tcp_connect(&r.self, &self, addr[0].ai_addr, (rSelf, status) nothrow {
 			auto r = getSelf!ConnectPromise(rSelf);
-			enforce(status == 0);
-			r.resolve();
+			if (status == 0) {
+				r.resolve();
+			} else {
+				r.reject(new UvError(status));
+			}
 		});
 		err.uvCheck(r);
 		r.finall(() => gcrelease(r));

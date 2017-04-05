@@ -8,7 +8,7 @@ import upromised.uv : uvCheck;
 class Addrinfo {
     addrinfo* res;
 
-    this(addrinfo* res) {
+    this(addrinfo* res) nothrow {
         this.res = res;
     }
 
@@ -35,7 +35,7 @@ Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, const(char)[] s
     import std.string : toStringz;
     auto r = new GetAddrinfoPromise;
     gcretain(r);
-    int err = uv_getaddrinfo(ctx, &r.self, (rSelf, status, res) {
+    int err = uv_getaddrinfo(ctx, &r.self, (rSelf, status, res) nothrow {
         auto r = getSelf!GetAddrinfoPromise(rSelf);
         if (status.uvCheck(r)) return;
         r.resolve(new Addrinfo(res));

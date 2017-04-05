@@ -5,7 +5,7 @@ import std.exception : enforce;
 import upromised.memory : gcrelease, gcretain, getSelf;
 import upromised.promise : Promise, PromiseIterator;
 import upromised.stream : Stream;
-import upromised.uv : uvCheck;
+import upromised.uv : uvCheck, UvError;
 
 class UvStream(SELF) : Stream {
 private:
@@ -23,13 +23,13 @@ public:
 		gcretain(this);
 	}
 
-	private extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) {
+	private extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) nothrow {
 		buf.base = cast(char*)(new ubyte[size]).ptr;
 		gcretain(buf.base);
 		buf.len = size;
 	}
 	
-	private extern (C) static void readCb(uv_stream_t* selfSelf, long nread, inout(uv_buf_t)* buf) {
+	private extern (C) static void readCb(uv_stream_t* selfSelf, long nread, inout(uv_buf_t)* buf) nothrow {
 		import upromised.uv : stream;
 
 		auto self = getSelf!UvStream(selfSelf);
@@ -38,8 +38,13 @@ public:
 			return;
 		}
 		if (buf.base !is null) gcrelease(buf.base);
-		enforce(nread >= 0);
+		if (nread <= 0) {
+			self.readPromise.reject(new UvError(cast(int)nread));
+			return;
+		}
+		
 		uv_read_stop(self.self.stream);
+		assert(self.readPromise !is null);
 		self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]).then((_) {
 			uv_read_start(self.self.stream, &readAlloc, &readCb).uvCheck();
 		}).except((Exception e) { self.readPromise.reject(e); }).nothrow_();
@@ -68,10 +73,13 @@ public:
 		gcretain(r);
 		r.data.base = cast(char*)data.ptr;
 		r.data.len = data.length;
-		int err = uv_write(&r.self, self.stream, &r.data, 1, (rSelf, status) {
+		int err = uv_write(&r.self, self.stream, &r.data, 1, (rSelf, status) nothrow {
 			auto r = getSelf!WritePromise(rSelf);
-			enforce(status == 0);
-			r.resolve();
+			if (status == 0) {
+				r.resolve();
+			} else {
+				r.reject(new UvError(status));
+			}
 		});
 		err.uvCheck(r);
 		r.finall(() => gcrelease(r));
@@ -87,10 +95,13 @@ public:
 
 		ShutdownPromise r = new ShutdownPromise;
 		gcretain(r);
-		int err = uv_shutdown(&r.self, self.stream, (rSelf, status) {
+		int err = uv_shutdown(&r.self, self.stream, (rSelf, status) nothrow {
 			auto r = getSelf!ShutdownPromise(rSelf);
-			enforce(status == 0);
-			r.resolve();
+			if (status == 0) {
+				r.resolve();
+			} else {
+				r.reject(new UvError(status));
+			}
 		});
 		err.uvCheck(r);
 		r.finall(() => gcrelease(r));
@@ -106,7 +117,7 @@ public:
 		if (closePromise) return closePromise;
 
 		closePromise = new Promise!void;
-		uv_close(self.handle, (selfSelf) {
+		uv_close(self.handle, (selfSelf) nothrow {
 			auto self = getSelf!UvStream(selfSelf);
 			self.closePromise.resolve();
 			gcrelease(self);

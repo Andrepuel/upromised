@@ -29,7 +29,7 @@ public:
     Promise!void close() nothrow {
         if (closePromise !is null) return closePromise;
         closePromise = new Promise!void;
-        uv_close(self.handle, (selfSelf) {
+        uv_close(self.handle, (selfSelf) nothrow {
             auto self = getSelf!Timer(selfSelf);
             gcrelease(self);
             self.closePromise.resolve();
@@ -43,7 +43,7 @@ public:
         assert(startPromise is null);
         startPromise = new PromiseIterator!int;
         auto r = startPromise;
-        int err = uv_timer_start(&self, (selfSelf) {
+        int err = uv_timer_start(&self, (selfSelf) nothrow {
             auto self = getSelf!Timer(selfSelf);
             self.startPromise.resolve(0).then((cont) {
                 if (uv_timer_get_repeat(&self.self) == 0) {
