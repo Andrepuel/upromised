@@ -13,19 +13,15 @@ int main(string[] args) {
 			return loop.tlsHandshake(socket, tlsctx, hostname).then((tls) {
 				return Promise!Client.resolved(new Client(tls))
 				.then((http) {
-					return http.sendRequest(Method.GET, "/")
-						.then(() => http.sendHeaders([Header("Host", hostname)]))
-						.then(() => http.sendBody())
-						.then(() => http.fetchResponse())
-						.then((response) => writeln(response))
-						.then(() => http.fetchHeaders().each((x) => writeln(x)))
-						.then((_) => http.fetchBody().each((x) => writeln([cast(const(char)[])x])));
+					return http.fullRequest(Method.GET, "/", [Header("Host", hostname)])
+					.then((r) {
+						writeln(r);
+						return r.bodyData.each((x) => writeln([cast(const(char)[])x]));
+					});
 				})
 				.then((_) => tls.shutdown())
 				.finall(() => tls.close());
-			})
-			.then(() => socket.shutdown())
-			.finall(() => socket.close());
+			});
 		});
 	}).nothrow_();
 

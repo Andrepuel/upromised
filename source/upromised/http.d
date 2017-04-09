@@ -21,6 +21,12 @@ struct Response {
 	string statusLine;
 }
 
+struct FullResponse {
+	Response response;
+	Header[] headers;
+	PromiseIterator!(const(ubyte)[]) bodyData;
+}
+
 private inout(Y)[] as(Y, T)(inout(T) input) {
 	return cast(inout(Y)[])input;
 }
@@ -126,6 +132,44 @@ public:
 		return output
 			.each((data) => stream.write(data))
 			.then((_) => inputFlow);
+	}
+
+	Promise!FullResponse fullRequest(Method method, string uri, Header[] headers, immutable(ubyte)[] bodyData) nothrow {
+		import upromised.operations : toAsync, toAsyncChunks;
+
+		return fullRequest(method, uri, headers.toAsync, bodyData.toAsyncChunks);
+	}
+
+	Promise!FullResponse fullRequest(Method method, string uri, PromiseIterator!Header headers, immutable(ubyte)[] bodyData) nothrow {
+		import upromised.operations : toAsyncChunks;
+
+		return fullRequest(method, uri, headers, bodyData.toAsyncChunks);
+	}
+
+	Promise!FullResponse fullRequest(Method method, string uri, Header[] headers, PromiseIterator!(immutable(ubyte)[]) bodyData = null) nothrow {
+		import upromised.operations : toAsync;
+		
+		return fullRequest(method, uri, headers.toAsync, bodyData);
+	}
+
+	Promise!FullResponse fullRequest(Method method, string uri, PromiseIterator!Header headers, PromiseIterator!(immutable(ubyte)[]) bodyData = null) nothrow {
+		import upromised.operations : readAll;
+		
+		FullResponse r;
+		return sendRequest(method, uri)
+		.then(() => sendHeaders(headers))
+		.then(() {
+			if (bodyData !is null) {
+				return sendBody(bodyData);
+			} else {
+				return sendBody();
+			}
+		}).then(() => fetchResponse())
+		.then((response) => r.response = response)
+		.then((_) => fetchHeaders().readAll)
+		.then((headers) => r.headers = headers)
+		.then((_) => r.bodyData = fetchBody())
+		.then((_) => r);
 	}
 
 	Promise!void sendRequest(Method method, string uri) nothrow {
