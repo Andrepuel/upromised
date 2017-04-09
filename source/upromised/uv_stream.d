@@ -4,7 +4,7 @@ import deimos.libuv._d;
 import std.exception : enforce;
 import upromised.memory : gcrelease, gcretain, getSelf;
 import upromised.promise : Promise, PromiseIterator;
-import upromised.stream : Stream;
+import upromised.stream : Interrupted, Stream;
 import upromised.uv : uvCheck, UvError;
 
 class UvStream(SELF) : Stream {
@@ -30,16 +30,23 @@ public:
 	}
 	
 	private extern (C) static void readCb(uv_stream_t* selfSelf, long nread, inout(uv_buf_t)* buf) nothrow {
+		import std.algorithm : swap;
 		import upromised.uv : stream;
 
 		auto self = getSelf!UvStream(selfSelf);
 		if (nread == uv_errno_t.UV_EOF) {
-			self.readPromise.resolve();
+			typeof(self.readPromise) gone;
+			swap(gone, self.readPromise);
+			gone.resolve();
 			return;
 		}
+
 		if (buf.base !is null) gcrelease(buf.base);
+
 		if (nread <= 0) {
-			self.readPromise.reject(new UvError(cast(int)nread));
+			typeof(self.readPromise) gone;
+			swap(gone, self.readPromise);
+			gone.reject(new UvError(cast(int)nread));
 			return;
 		}
 		
@@ -112,9 +119,15 @@ public:
 	}
 
 	override Promise!void close() nothrow {
+		import std.algorithm : swap;
 		import upromised.uv : handle;
 
 		if (closePromise) return closePromise;
+		if (readPromise) {
+			typeof(readPromise) gone;
+			swap(gone, readPromise);
+			gone.reject(new Interrupted);
+		}
 
 		closePromise = new Promise!void;
 		uv_close(self.handle, (selfSelf) nothrow {

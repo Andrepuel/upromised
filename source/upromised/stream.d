@@ -2,6 +2,13 @@ module upromised.stream;
 import upromised.promise : Promise, PromiseIterator;
 import upromised : fatal;
 
+class Interrupted : Exception {
+public:
+	this() nothrow {
+		super("Operation interrupted");
+	}
+}
+
 interface Stream {
     Promise!void close() nothrow;
     Promise!void shutdown() nothrow;
