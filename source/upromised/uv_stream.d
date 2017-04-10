@@ -54,7 +54,11 @@ public:
 		assert(self.readPromise !is null);
 		self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]).then((_) {
 			uv_read_start(self.self.stream, &readAlloc, &readCb).uvCheck();
-		}).except((Exception e) { self.readPromise.reject(e); }).nothrow_();
+		}).except((Exception e) { 
+			if (self.readPromise) {
+				self.readPromise.reject(e);
+			}
+		}).nothrow_();
 	}
 
 	override PromiseIterator!(const(ubyte)[]) read() nothrow {
