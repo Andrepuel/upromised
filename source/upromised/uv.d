@@ -10,7 +10,7 @@ class UvError : Exception {
 	this(int code) nothrow {
 		try {
 			super("UV error (%s) %s".format(uv_strerror(code).fromStringz, code));
-		} catch(Throwable e) {
+		} catch(Exception e) {
 			fatal(e);
 		}
 	}

@@ -47,7 +47,7 @@ public:
         read_.resolve();
     }
 
-    void writeToRead(Throwable e) nothrow {
+    void writeToRead(Exception e) nothrow {
         assert(read_ !is null);
         read_.reject(e);
     }

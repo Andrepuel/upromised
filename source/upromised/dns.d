@@ -41,7 +41,7 @@ Promise!Addrinfo getAddrinfo(uv_loop_t* ctx, const(char)[] node, const(char)[] s
         r.resolve(new Addrinfo(res));
     }, node.toStringz, service.toStringz, null);
     err.uvCheck(r);
-    r.except((Throwable e){}).then(() => gcrelease(r));
+    r.finall(() => gcrelease(r));
     return r;
 }
 private class GetAddrinfoPromise : Promise!Addrinfo {

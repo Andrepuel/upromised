@@ -44,7 +44,7 @@ protected:
             }).nothrow_();
         }
     }
-    void rejectOneData(Throwable e) nothrow {
+    void rejectOneData(Exception e) nothrow {
         read_.reject(e);
     }
 }

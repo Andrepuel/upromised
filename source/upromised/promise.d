@@ -2,7 +2,7 @@ module upromised.promise;
 
 import std.format : format;
 
-void fatal(Throwable e = null, string file = __FILE__, ulong line = __LINE__) nothrow {
+void fatal(Exception e = null, string file = __FILE__, ulong line = __LINE__) nothrow {
     import core.stdc.stdlib : abort;
     import std.stdio : stderr;
     try {
@@ -10,7 +10,7 @@ void fatal(Throwable e = null, string file = __FILE__, ulong line = __LINE__) no
         if (e) {
             stderr.writeln(e);
         }
-    } catch(Throwable) {
+    } catch(Exception) {
         abort();
     }
     abort();
@@ -36,7 +36,7 @@ private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
             } else {
                 intermediary.then((a) => t.resolve(a));
             }
-            intermediary.except((Throwable e) => t.reject(e));
+            intermediary.except((Exception e) => t.reject(e));
         } else {
             static if (is(R == void)) {
                 b(args);
@@ -45,14 +45,14 @@ private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
                 t.resolve(b(args));
             }
         }
-    } catch(Throwable e) {
+    } catch(Exception e) {
         t.reject(e);
     }
 }
 
 class Promise_ {
 protected:
-    Throwable rejected_;
+    Exception rejected_;
 
     void resolveExceptOne(R,E)(Promise!void r, R delegate(E) cb) nothrow
     if (is(Promisify!R == Promise!void))
@@ -107,7 +107,7 @@ private:
                 r.resolve(args);
             }
         });
-        r2.except((Throwable e) => r.reject(e));
+        r2.except((Exception e) => r.reject(e));
     }
 
     void resolveAll() nothrow {
@@ -146,7 +146,7 @@ protected:
 
 public:
     Promise!void except(R,E)(R delegate(E) cb) nothrow
-    if (is(Promisify!R == Promise!void) && is(E : Throwable))
+    if (is(Promisify!R == Promise!void) && is(E : Exception))
     {
         auto r = new Promise!void;
         thenPush(() => resolveExceptOne(r, cb));
@@ -159,7 +159,7 @@ public:
         return r;
     }
 
-    void reject(Throwable err) nothrow {
+    void reject(Exception err) nothrow {
         isResolved_ = true;
         rejected_ = err;
         resolveAll();
@@ -175,7 +175,7 @@ public:
         return r;
     }
 
-    static auto rejected(Throwable e) nothrow {
+    static auto rejected(Exception e) nothrow {
         static if (Types_.length == 0) {
             auto r = new Promise!void;
         } else {
@@ -186,7 +186,7 @@ public:
     }
 
     Promise!void nothrow_(string file = __FILE__, ulong line = __LINE__)  nothrow {
-        return except((Throwable e) => fatal(e, file, line));
+        return except((Exception e) => fatal(e, file, line));
     }
 }
 class Promise(T) : PromiseBase!T
@@ -277,7 +277,7 @@ unittest { //Exceptions
 
     auto err = new Exception("yada");
     bool caught = false;
-    a.except((Throwable e) {
+    a.except((Exception e) {
         assert(err is e);
         caught = true;
     }).nothrow_();
@@ -297,7 +297,7 @@ unittest { //Exception chaining
     auto err = new Exception("yada");
     a.except((X _) {
         assert(false);
-    }).except((Throwable e) {
+    }).except((Exception e) {
         assert(e is err);
         caught = true;
     }).nothrow_();
@@ -326,7 +326,7 @@ class PromiseIterator(T) {
 private:
     import std.typecons : Tuple;
 
-    Tuple!(T,Throwable,Promise!bool)[] resolved_;
+    Tuple!(T, Exception, Promise!bool)[] resolved_;
     bool end_;
     Promise!bool delegate(T) nothrow each_;
     Promise!bool eachThen_;  
@@ -382,7 +382,7 @@ private:
                 eachThen_.resolve(true);
                 return;
             }
-        }).except((Throwable e) {
+        }).except((Exception e) {
             popResolved(false);
             stop().reject(e);
         });
@@ -393,7 +393,7 @@ public:
         import std.typecons : tuple;
 
         assert(!end_);
-        resolved_ ~= tuple(a, Throwable.init, r);
+        resolved_ ~= tuple(a, Exception.init, r);
         if (each_ && resolved_.length == 1) {
             resolveOne();
         }
@@ -404,7 +404,7 @@ public:
         return r;
     }
 
-    Promise!bool reject(Throwable a) nothrow {
+    Promise!bool reject(Exception a) nothrow {
         import std.typecons : tuple;
 
         assert(!end_);
