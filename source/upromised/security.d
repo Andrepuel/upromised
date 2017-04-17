@@ -39,9 +39,12 @@ extern (C) {
 }
 
 class OSStatusError : Exception {
-	this(OSStatus status) {
-		super("OSStatus(%s)".format(status));
+	this(OSStatus status, string file = __FILE__, size_t line = __LINE__) {
+		this.status = status;
+		super("OSStatus(%s)".format(status), file, line);
 	}
+
+	OSStatus status;
 }
 
 private Promise!T readOne(T)(PromiseIterator!T read) nothrow {
@@ -179,6 +182,12 @@ protected:
 		readOne(new ubyte[1024])
 		.then((chunk) {
 			readOneData(chunk);
+		}).except((OSStatusError e) {
+			if (e.status == -9805) {
+				readOneData(null);
+			} else {
+				throw e;
+			}
 		}).except((Exception e) {
 			rejectOneData(e);
 		});
