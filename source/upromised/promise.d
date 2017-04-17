@@ -2,6 +2,21 @@ module upromised.promise;
 
 import std.format : format;
 
+struct DebugInfo {
+    string file;
+    size_t line;
+    Promise_ parent;
+
+    // Remarks: Printing a Promise per line ensures that
+    // something will get printed even in case of memory corruption
+    void printAll() nothrow {
+        import std.stdio : stderr;
+
+        try { stderr.writeln(file, ":", line); } catch(Exception){}
+        if (parent !is null) parent.info.printAll();
+    }
+}
+
 void fatal(Exception e = null, string file = __FILE__, ulong line = __LINE__) nothrow {
     import core.stdc.stdlib : abort;
     import std.stdio : stderr;
@@ -28,6 +43,13 @@ static assert(is(Promisify!(Promise!int) == Promise!int));
 static assert(is(Promisify!void == Promise!void));
 
 private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
+    scope(failure) {
+        import std.stdio : stderr;
+        
+        try { stderr.writeln("Fatal error"); } catch(Exception){}
+        t.info.printAll();
+    }
+
     try {
         static if(is(typeof(b(args)) : Promise_)) {
             auto intermediary = b(args);
@@ -51,6 +73,9 @@ private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
 }
 
 class Promise_ {
+public:
+    DebugInfo info;
+
 protected:
     Exception rejected_;
 
@@ -127,10 +152,11 @@ private:
     }
 
 protected:
-    Promisify!R thenBase(R,U...)(R delegate(U) cb) nothrow
+    Promisify!R thenBase(R,U...)(R delegate(U) cb, string file = __FILE__, size_t line = __LINE__) nothrow
     if(is(U == Types_))
     {
         auto r = new Promisify!R();
+        r.info = DebugInfo(file, line, this);
         thenPush(() => resolveOne(r, cb));
         return r;
     }
@@ -145,16 +171,18 @@ protected:
     }
 
 public:
-    Promise!void except(R,E)(R delegate(E) cb) nothrow
+    Promise!void except(R,E)(R delegate(E) cb, string file = __FILE__, size_t line = __LINE__) nothrow
     if (is(Promisify!R == Promise!void) && is(E : Exception))
     {
         auto r = new Promise!void;
+        r.info = DebugInfo(file, line, this);
         thenPush(() => resolveExceptOne(r, cb));
         return r;
     }
 
-    Promisify!R finall(R)(R delegate() cb) nothrow {
+    Promisify!R finall(R)(R delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
         auto r = new Promisify!R;
+        r.info = DebugInfo(file, line, this);
         thenPush(() => resolveFinallyOne(r, cb));
         return r;
     }
@@ -165,28 +193,30 @@ public:
         resolveAll();
     }
 
-    static auto resolved(Types_ t) nothrow {
+    static auto resolved(Types_ t, string file = __FILE__, size_t line = __LINE__) nothrow {
         static if (Types_.length == 0) {
             auto r = new Promise!void;
         } else {
             auto r = new Promise!Types_;
         }
         r.resolve(t);
+        r.info = DebugInfo(file, line, null);
         return r;
     }
 
-    static auto rejected(Exception e) nothrow {
+    static auto rejected(Exception e, string file = __FILE__, size_t line = __LINE__) nothrow {
         static if (Types_.length == 0) {
             auto r = new Promise!void;
         } else {
             auto r = new Promise!Types_;
         }
         r.reject(e);
+        r.info = DebugInfo(file, line, null);
         return r;
     }
 
     Promise!void nothrow_(string file = __FILE__, ulong line = __LINE__)  nothrow {
-        return except((Exception e) => fatal(e, file, line));
+        return except((Exception e) => fatal(e, file, line), file, line);
     }
 }
 class Promise(T) : PromiseBase!T
@@ -200,8 +230,8 @@ public:
         resolveBase(v);
     }
 
-    Promisify!R then(R)(R delegate(T) cb) nothrow {
-        return thenBase(cb);
+    Promisify!R then(R)(R delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+        return thenBase(cb, file, line);
     }
 }
 class Promise(T) : PromiseBase!()
@@ -214,8 +244,8 @@ public:
     void resolve() nothrow {
         resolveBase();
     }
-    Promisify!R then(R)(R delegate() cb) nothrow {
-        return thenBase!R(cb);
+    Promisify!R then(R)(R delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+        return thenBase!R(cb, file, line);
     }
 }
 unittest { // Multiple then
@@ -398,17 +428,19 @@ public:
             resolveOne();
         }
     }
-    Promise!bool resolve(T a) nothrow {
+    Promise!bool resolve(T a, string file = __FILE__, size_t line = __LINE__) nothrow {
         Promise!bool r = new Promise!bool;
+        r.info = DebugInfo(file, line, null);
         resolve(a, r);
         return r;
     }
 
-    Promise!bool reject(Exception a) nothrow {
+    Promise!bool reject(Exception a, string file = __FILE__, size_t line = __LINE__) nothrow {
         import std.typecons : tuple;
 
         assert(!end_);
         Promise!bool r = new Promise!bool;
+        r.info = DebugInfo(file, line, null);
         resolved_ ~= tuple(T.init, a, r);
         if (each_ && resolved_.length == 1) {
             resolveOne();
@@ -425,7 +457,7 @@ public:
         }
     }
 
-    Promise!bool each(R)(R delegate(T) cb) nothrow
+    Promise!bool each(R)(R delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow
     if(is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
     {
         assert(each_ is null);
@@ -437,6 +469,7 @@ public:
         } else if (end_) {
             eachThen_.resolve(true);
         }
+        r.info = DebugInfo(file, line, null);
         return r;
     }
 }
