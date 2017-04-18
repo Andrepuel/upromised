@@ -1,6 +1,6 @@
 module upromised.loop;
 import upromised.stream : Stream;
-import upromised.promise : Promise;
+import upromised.promise : Promise, PromiseIterator;
 
 struct Address {
 	private Object self;
@@ -13,6 +13,7 @@ struct TlsContext {
 interface Loop {
 	Promise!Address resolve(const(char)[] hostname, ushort port) nothrow;
 	Promise!Stream connectTcp(Address dns) nothrow;
+	PromiseIterator!Stream listenTcp(Address dns) nothrow;
 	string defaultCertificatesPath() nothrow;
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
@@ -56,6 +57,27 @@ Loop defaultLoop() {
 						})
 						.then!Stream(() => socket);
 				});
+		}
+
+		override PromiseIterator!Stream listenTcp(Address dns) nothrow {
+			import upromised.dns : Addrinfo;
+			import upromised.tcp : TcpSocket;
+
+			PromiseIterator!Stream r = new PromiseIterator!Stream;
+			Promise!void.resolved()
+				.then(() => new TcpSocket(loop))
+				.then((socket) {
+					return Promise!void.resolved().then(() => socket.bind(cast(Addrinfo)dns.self))
+						.then(() => socket.listen(128).each((conn) {
+							return r.resolve(conn);
+						}))
+						.finall(() => socket.close())
+						.except((Exception e) {
+							r.reject(e);
+						});
+				});
+
+			return r;
 		}
 
 		override string defaultCertificatesPath() nothrow {
