@@ -49,3 +49,14 @@ public uv_stream_t* stream(ref uv_tty_t self) nothrow {
 public uv_handle_t* handle(ref uv_tty_t self) nothrow {
 	return cast(uv_handle_t*)&self;
 }
+
+public uv_stream_t* stream(ref uv_pipe_t self) nothrow {
+	return cast(uv_stream_t*)&self;
+}
+public uv_handle_t* handle(ref uv_pipe_t self) nothrow {
+	return cast(uv_handle_t*)&self;
+}
+
+public uv_handle_t* handle(ref uv_process_t self) nothrow {
+	return cast(uv_handle_t*)&self;
+}
