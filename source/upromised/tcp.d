@@ -5,9 +5,9 @@ import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck, UvError;
 import upromised.uv_stream : UvStream;
 import upromised : fatal;
-import upromised.dns : Addrinfo;
 import std.exception : enforce;
 import std.format : format;
+import std.socket : Address;
 import deimos.libuv.uv;
 import deimos.libuv._d;
 
@@ -31,16 +31,15 @@ public:
 		uv_tcp_init(ctx, &self).uvCheck();
 	}
 
-	void bind(Addrinfo addrinfo) {
+	void bind(Address[] addr) {
 		import std.string : toStringz;
 
-		auto addr = addrinfo.get();
 		enforce(addr.length > 0);
-		uv_tcp_bind(&self, addr[0].ai_addr, 0).uvCheck();
+		uv_tcp_bind(&self, addr[0].name(), 0).uvCheck();
 	}
 
 	PromiseIterator!TcpSocket listen(int backlog) nothrow {
-        import std.algorithm : swap;
+		import std.algorithm : swap;
 		import upromised.uv : stream;
 
 		assert(listenPromise is null);
@@ -67,18 +66,18 @@ public:
 		return listenPromise;
 	}
 
-	Promise!void connect(Addrinfo addrinfo) nothrow {
+	Promise!void connect(Address[] addr) nothrow {
 		import std.string : toStringz;
 
-		auto addr = addrinfo.get();
 		if (addr.length == 0) {
 			return Promise!void.rejected(new Exception("Empty address info"));
 		}
 
 		ConnectPromise r = new ConnectPromise;
+		r.addr = addr[0];
 		gcretain(r);
 		scope(failure) gcrelease(r);
-		int err = uv_tcp_connect(&r.self, &self, addr[0].ai_addr, (rSelf, status) nothrow {
+		int err = uv_tcp_connect(&r.self, &self, r.addr.name(), (rSelf, status) nothrow {
 			auto r = getSelf!ConnectPromise(rSelf);
 			if (status == 0) {
 				r.resolve();
@@ -91,6 +90,7 @@ public:
 		return r;
 	}
 	private class ConnectPromise : Promise!void {
+		Address addr;
 		uv_connect_t self;
 	}
 }

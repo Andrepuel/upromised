@@ -1,19 +1,16 @@
 module upromised.loop;
+import std.socket : Address;
 import upromised.stream : Stream;
 import upromised.promise : Promise, PromiseIterator;
-
-struct Address {
-	private Object self;
-}
 
 struct TlsContext {
 	private Object self;
 }
 
 interface Loop {
-	Promise!Address resolve(const(char)[] hostname, ushort port) nothrow;
-	Promise!Stream connectTcp(Address dns) nothrow;
-	PromiseIterator!Stream listenTcp(Address dns) nothrow;
+	Promise!(Address[]) resolve(const(char)[] hostname, ushort port) nothrow;
+	Promise!Stream connectTcp(Address[] dns) nothrow;
+	PromiseIterator!Stream listenTcp(Address[] dns) nothrow;
 	string defaultCertificatesPath() nothrow;
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
@@ -35,21 +32,20 @@ Loop defaultLoop() {
 			return uv_run(loop, uv_run_mode.UV_RUN_DEFAULT);
 		}
 
-		override Promise!Address resolve(const(char)[] hostname, ushort port) nothrow {
+		override Promise!(Address[]) resolve(const(char)[] hostname, ushort port) nothrow {
 			import upromised.dns : getAddrinfo;
 
-			return getAddrinfo(loop, hostname, port).then((addr) => Address(addr));
+			return getAddrinfo(loop, hostname, port);
 		}
 
-		override Promise!Stream connectTcp(Address dns) nothrow {
-			import upromised.dns : Addrinfo;
+		override Promise!Stream connectTcp(Address[] dns) nothrow {
 			import upromised.tcp : TcpSocket;
 
 			return Promise!void.resolved()
 				.then(() => new TcpSocket(loop))
 				.then((socket) {
 					return socket
-						.connect(cast(Addrinfo)dns.self)
+						.connect(dns)
 						.except((Exception e) {
 							return socket.close().then(() {
 								throw e;
@@ -59,15 +55,14 @@ Loop defaultLoop() {
 				});
 		}
 
-		override PromiseIterator!Stream listenTcp(Address dns) nothrow {
-			import upromised.dns : Addrinfo;
+		override PromiseIterator!Stream listenTcp(Address[] dns) nothrow {
 			import upromised.tcp : TcpSocket;
 
 			PromiseIterator!Stream r = new PromiseIterator!Stream;
 			Promise!void.resolved()
 				.then(() => new TcpSocket(loop))
 				.then((socket) {
-					return Promise!void.resolved().then(() => socket.bind(cast(Addrinfo)dns.self))
+					return Promise!void.resolved().then(() => socket.bind(dns))
 						.then(() => socket.listen(128).each((conn) {
 							return r.resolve(conn);
 						}))
