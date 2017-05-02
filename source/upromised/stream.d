@@ -1,4 +1,5 @@
 module upromised.stream;
+import std.socket : Address;
 import upromised.promise : Promise, PromiseIterator;
 import upromised : fatal;
 
@@ -47,4 +48,15 @@ protected:
     void rejectOneData(Exception e) nothrow {
         read_.reject(e);
     }
+}
+
+struct Datagram {
+	Address addr;
+	const(ubyte)[] message;
+}
+
+interface DatagramStream {
+	Promise!void sendTo(Address dest, immutable(ubyte)[] message) nothrow;
+	PromiseIterator!Datagram recvFrom() nothrow;
+	Promise!void close() nothrow;
 }

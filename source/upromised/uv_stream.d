@@ -7,6 +7,20 @@ import upromised.promise : Promise, PromiseIterator;
 import upromised.stream : Interrupted, Stream;
 import upromised.uv : uvCheck, UvError;
 
+extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) nothrow {
+	import core.memory : GC;
+
+	buf.base = cast(char*)GC.malloc(size);
+	gcretain(buf.base);
+	buf.len = size;
+}
+
+const(char)[] shrinkBuf(const(uv_buf_t)* buf, size_t len) nothrow {
+	import core.memory : GC;
+	auto r = cast(const(char)*)GC.realloc(cast(void*)buf.base, len);
+	return r[0..len];
+}
+
 class UvStream(SELF) : Stream {
 private:
 	Promise!void closePromise;
@@ -21,12 +35,6 @@ public:
 	this(uv_loop_t* ctx) {
 		this.ctx = ctx;
 		gcretain(this);
-	}
-
-	private extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) nothrow {
-		buf.base = cast(char*)(new ubyte[size]).ptr;
-		gcretain(buf.base);
-		buf.len = size;
 	}
 	
 	private extern (C) static void readCb(uv_stream_t* selfSelf, long nread, inout(uv_buf_t)* buf) nothrow {
@@ -49,10 +57,12 @@ public:
 			gone.reject(new UvError(cast(int)nread));
 			return;
 		}
+
+		auto base = shrinkBuf(buf, nread);
 		
 		uv_read_stop(self.self.stream);
 		assert(self.readPromise !is null);
-		self.readPromise.resolve(cast(ubyte[])buf.base[0..nread]).then((_) {
+		self.readPromise.resolve(cast(ubyte[])base).then((_) {
 			uv_read_start(self.self.stream, &readAlloc, &readCb).uvCheck();
 		}).except((Exception e) { 
 			if (self.readPromise) {

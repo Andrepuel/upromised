@@ -1,6 +1,6 @@
 module upromised.loop;
 import std.socket : Address;
-import upromised.stream : Stream;
+import upromised.stream : DatagramStream, Stream;
 import upromised.promise : Promise, PromiseIterator;
 
 struct TlsContext {
@@ -14,6 +14,7 @@ interface Loop {
 	string defaultCertificatesPath() nothrow;
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
+	Promise!DatagramStream udp(Address addr = null) nothrow;
 	void* inner() nothrow;
 	int run();
 }
@@ -145,6 +146,26 @@ Loop defaultLoop() {
 				r.reject(new Exception("TLS not supported"));
 				return r;
 			}
+		}
+
+		override Promise!DatagramStream udp(Address addr) nothrow {
+			import upromised.udp : UdpSocket;
+
+			return Promise!void.resolved()
+			.then(() => new UdpSocket(loop))
+			.then((udp) {
+				return Promise!void.resolved()
+				.then(() {
+					if (addr !is null) {
+						udp.bind(addr);
+					}
+				}).except((Exception e) {
+					return udp.close().then(() {
+						throw e;
+					});
+				})
+				.then(() => cast(DatagramStream)udp);
+			});
 		}
 	};
 }

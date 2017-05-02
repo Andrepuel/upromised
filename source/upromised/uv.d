@@ -60,3 +60,6 @@ public uv_handle_t* handle(ref uv_pipe_t self) nothrow {
 public uv_handle_t* handle(ref uv_process_t self) nothrow {
 	return cast(uv_handle_t*)&self;
 }
+public uv_handle_t* handle(ref uv_udp_t self) nothrow {
+	return cast(uv_handle_t*)&self;
+}
