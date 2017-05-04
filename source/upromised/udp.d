@@ -78,6 +78,10 @@ public:
 		import upromised.dns : toAddress;
 		import upromised.uv_stream : readAlloc, shrinkBuf;
 
+		if (closePromise !is null) {
+			return 0;
+		}
+
 		return uv_udp_recv_start(&self, &readAlloc, (selfArg, nread, buf, addr, flags) nothrow {
 			auto self = selfArg.getSelf!UdpSocket;
 
