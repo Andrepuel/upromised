@@ -8,7 +8,11 @@ import std.exception : enforce;
 import std.format : format;
 
 shared static this() {
+    import deimos.openssl.err : ERR_load_crypto_strings;
+
     SSL_library_init();
+    ERR_load_crypto_strings();
+    SSL_load_error_strings();
 }
 
 private struct ExData(alias name, T) {
@@ -79,6 +83,29 @@ private string[] commonNames(X509* x509) {
         .array;
 }
 
+private bool matches(const(char)[] patternStr, const(char)[] hostnameStr) {
+    import std.string : split;
+
+    auto pattern = patternStr.split(".");
+    auto hostname = hostnameStr.split(".");
+
+    foreach_reverse(i; 0..hostname.length) {
+        if (pattern.length <= i) {
+            return false;
+        }
+
+        if (pattern[i] == "*") {
+            return true;
+        }
+
+        if (pattern[i] != hostname[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 struct BioPair {
     BIO* read_;
     BIO* write_;
@@ -128,9 +155,17 @@ struct BioPair {
 }
 
 class OpensslError : Exception {
-    this(int ret, int err) {
-        super("OpensslError ret=%s err=%s".format(ret, err));
+    this(int ret, int err, string file = __FILE__, size_t line = __LINE__) {
+        import deimos.openssl.err : ERR_error_string, ERR_get_error;
+        import std.string : fromStringz;
+
+        string msg;
+        auto errNum = ERR_get_error();
+        if (errNum != 0) {
+            msg = ERR_error_string(errNum, null).fromStringz.idup;
     }
+        super("OpensslError ret=%s err=%s, msg %s".format(ret, err, msg), file, line);
+}
 }
 
 class UnderlyingShutdown : Exception {
@@ -179,6 +214,9 @@ private:
     }
 
     Want tryOperate(alias a, Args...)(Args args) {
+        import deimos.openssl.err : ERR_clear_error;
+
+        ERR_clear_error();
         int ret = a(ssl, args);
         if (ret < 0) {
             int err = SSL_get_error(ssl, ret);
@@ -270,12 +308,12 @@ public:
                 const(char)[] hostname = HostnameExData.get(ssl).fromStringz;
                 auto x509 = X509_STORE_CTX_get_current_cert(ctx);
 
-                if (x509.alternativeNames.map!((an) => an == hostname).any) {
+                if (x509.alternativeNames.map!((an) => an.matches(hostname)).any) {
                     return 1;
                 }
 
                 string[] commonNames = x509.commonNames;
-                if (commonNames.length > 0 && commonNames[$-1] == hostname) {
+                if (commonNames.length > 0 && commonNames[$-1].matches(hostname)) {
                     return 1;
                 }
 
