@@ -6,25 +6,17 @@ import upromised.promise : Promise, PromiseIterator;
 PromiseIterator!(typeof(T.init.front)) toAsync(T)(T input) nothrow
 if (isInputRange!T)
 {
-	auto r = new PromiseIterator!(typeof(T.init.front));
-	void delegate(bool) nothrow next;
-	next = (bool) nothrow {
-		try {
+	return new class PromiseIterator!(typeof(T.init.front)) {
+		override Promise!ItValue next(Promise!bool) {
 			if (input.empty) {
-				r.resolve();
+				return Promise!ItValue.resolved(ItValue(true));
 			} else {
-				auto value = input.front;
+				auto value = ItValue(false, input.front);
 				input.popFront;
-				r.resolve(value).then(next);
+				return Promise!ItValue.resolved(value);
 			}
-		} catch(Exception e) {
-			r.reject(e);
 		}
 	};
-
-	next(false);
-	
-	return r;
 }
 unittest {
 	auto b = [1, 2, 3].toAsync;
@@ -73,22 +65,18 @@ unittest {
 PromiseIterator!(T[]) toAsyncChunks(T)(T[] input, size_t chunkLength = 1024) nothrow {
 	import std.algorithm : min;
 
-	auto r = new PromiseIterator!(T[]);
-
-	void delegate(bool) nothrow next;
-	next = (bool) nothrow {
-		if (input.length == 0) {
-			r.resolve();
-		} else {
-			auto length = input.length.min(chunkLength);
-			const auto value = input[0..length];
-			input = input[length..$];
-			r.resolve(value).then(next);
+	return new class PromiseIterator!(T[]) {
+		override Promise!ItValue next(Promise!bool) {
+			if (input.length == 0) {
+				return Promise!ItValue.resolved(ItValue(true));
+			} else {
+				auto length = input.length.min(chunkLength);
+				const auto value = input[0..length];
+				input = input[length..$];
+				return Promise!ItValue.resolved(ItValue(false, value));
+			}
 		}
 	};
-	next(true);
-
-	return r;
 }
 unittest {
 	import std.array : join;

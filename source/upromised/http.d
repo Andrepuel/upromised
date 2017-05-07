@@ -3,7 +3,7 @@ import std.exception : enforce;
 import std.format : format;
 import upromised.manual_stream : ManualStream;
 import upromised.operations : readAllChunks;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromiseIterator, Promise, PromiseIterator;
 import upromised.stream : Stream;
 import upromised.tokenizer : Tokenizer;
 
@@ -38,31 +38,36 @@ PromiseIterator!(const(ubyte)[]) decodeChunked(PromiseIterator!(const(ubyte)[]) 
 PromiseIterator!(const(ubyte)[]) decodeChunked(Tokenizer!(const(ubyte)) tokenizer) nothrow {
 	import std.conv : to;
 
-	auto r = new PromiseIterator!(const(ubyte)[]);
-	
 	tokenizer.partialReceive();
 	tokenizer.limit();
 	tokenizer.separator("\r\n");
 
-	size_t chunkSize;
-	bool step;
-	tokenizer.read().each((chunk) {
-		step = !step;
-		if (step) {
-			tokenizer.separator();
-			chunkSize = chunk.as!char[0..$-2].to!size_t(16);
-			tokenizer.limit(chunkSize + 2);
-			return Promise!bool.resolved(true);
-		} else {
-			tokenizer.separator("\r\n");
-			tokenizer.limit();
-			return r.resolve(chunk[0..$-2]).then(a => a && chunkSize > 0);
+	return new class PromiseIterator!(const(ubyte)[]) {
+		size_t chunkSize = -1;
+
+		override Promise!ItValue next(Promise!bool) nothrow {
+			if (chunkSize == 0) {
+				return Promise!ItValue.resolved(ItValue(true));
+			}
+
+			bool step;
+			const(ubyte)[] chunkR;
+			return tokenizer.read().each((chunk) {
+				step = !step;
+				if (step) {
+					tokenizer.separator();
+					chunkSize = chunk.as!char[0..$-2].to!size_t(16);
+					tokenizer.limit(chunkSize + 2);
+					return true;
+				} else {
+					tokenizer.separator("\r\n");
+					tokenizer.limit();
+					chunkR = chunk[0..$-2];
+					return false;
+				}
+			}).then((eof) => eof ? ItValue(true) : ItValue(false, chunkR));
 		}
-	}).then(_ => r.resolve()).except((Exception e) {
-		r.reject(e);
-	}).nothrow_();
-	
-	return r;
+	};
 }
 unittest {
 	import upromised.operations : toAsyncChunks;
@@ -82,7 +87,7 @@ unittest {
 	auto err = new Exception("err");
 	bool called = false;
 
-	auto rejected = new PromiseIterator!(const(ubyte)[]);
+	auto rejected = new DelegatePromiseIterator!(const(ubyte)[]);
 	rejected.reject(err);
 	rejected
 		.decodeChunked
@@ -107,13 +112,10 @@ private:
 	Tokenizer!(const(ubyte)) inputTokenizer;
 
 public:
-	PromiseIterator!(immutable(ubyte)[]) output;
-	PromiseIterator!(const(ubyte)[]) input;
+	DelegatePromiseIterator!(immutable(ubyte)[]) output;
 
 	this() nothrow {
-		output = new PromiseIterator!(immutable(ubyte)[]);
-		input = new PromiseIterator!(const(ubyte)[]);
-		inputTokenizer = new Tokenizer!(const(ubyte))(this.input);
+		output = new DelegatePromiseIterator!(immutable(ubyte)[]);
 	}
 	
 	this(Stream stream) nothrow {
@@ -122,16 +124,13 @@ public:
 	}
 
 	Promise!void stream(Stream stream) nothrow {
-		auto inputFlow = stream
-			.read()
-			.each((data) => input.resolve(data).then((_) {}))
-			.then((_) => input.resolve())
-			.except((Exception e) { input.reject(e); })
-			.nothrow_();
+		assert(!inputTokenizer);
+		
+		inputTokenizer = new Tokenizer!(const(ubyte))(stream.read());
 
 		return output
 			.each((data) => stream.write(data))
-			.then((_) => inputFlow);
+			.then(() {});
 	}
 
 	Promise!FullResponse fullRequest(Method method, string uri, Header[] headers, immutable(ubyte)[] bodyData) nothrow {
@@ -174,8 +173,8 @@ public:
 
 	Promise!void sendRequest(Method method, string uri) nothrow {
 		return Promise!void.resolved()
-			.then(() => output.resolve("%s %s HTTP/1.1\r\n".format(method, uri).as!ubyte))
-			.then((_) {});
+		.then(() => output.resolve("%s %s HTTP/1.1\r\n".format(method, uri).as!ubyte))
+		.then((_) {});
 	}
 
 	Promise!void sendHeaders(Header[] headers) nothrow {
@@ -248,7 +247,7 @@ public:
 		Response r;
 		return inputTokenizer.read().each((response) {
 			const(char)[][] responseParts = response.as!char[0..$-2].split(" ");
-			enforce(responseParts.length > 2);
+			enforce(responseParts.length > 2, "%s should be two parts. %s".format(responseParts, [response]));
 			enforce(responseParts[0] == "HTTP/1.1");
 			r.statusCode = responseParts[1].to!int;
 			r.statusLine = responseParts[2..$].join(" ").idup;
@@ -263,27 +262,32 @@ public:
 		inputTokenizer.partialReceive();
 		inputTokenizer.limit();
 		inputTokenizer.separator("\r\n");
+		
+		return new class PromiseIterator!Header {
+			override Promise!ItValue next(Promise!bool) {
+				ItValue result;
+				return inputTokenizer.read().each((headerLine) {
+					if (headerLine.as!char == "\r\n") {
+						result.eof = true;
+						return false;
+					}
 
-		auto r = new PromiseIterator!Header;
-		inputTokenizer.read().each((headerLine) {
-			if (headerLine.as!char == "\r\n") {
-				return Promise!bool.resolved(false);
+					auto pos = headerLine.as!char.countUntil(": ");
+					Header header = Header(headerLine.as!char[0..pos], headerLine.as!char[pos + 2..$-2]);
+					result.value = header;
+
+					if (header.key == "Content-Length") {
+						contentLength = header.value.to!size_t;
+					}
+
+					if (header.key == "Transfer-Encoding" && header.value == "chunked") {
+						chunked = true;
+					}
+					
+					return false;
+				}).then((_) => result);
 			}
-
-			auto pos = headerLine.as!char.countUntil(": ");
-			Header header = Header(headerLine.as!char[0..pos], headerLine.as!char[pos + 2..$-2]);
-			
-			if (header.key == "Content-Length") {
-				contentLength = header.value.to!size_t;
-			}
-
-			if (header.key == "Transfer-Encoding" && header.value == "chunked") {
-				chunked = true;
-			}
-
-			return r.resolve(header);
-		}).then((_) => r.resolve()).except((Exception e) { r.reject(e); });
-		return r;
+		};
 	}
 
 	PromiseIterator!(const(ubyte)[]) fetchBody() nothrow {
@@ -295,14 +299,21 @@ public:
 		inputTokenizer.limit(contentLength);
 		inputTokenizer.separator();
 
-		auto r = new PromiseIterator!(const(ubyte)[]);
-		inputTokenizer.read().each((chunk) {
-			contentLength -= chunk.length;
-			inputTokenizer.limit(contentLength);
-			return r.resolve(chunk).then((_) => contentLength > 0);
-		}).then((_) => r.resolve()).except((Exception e) { r.reject(e); });
+		return new class PromiseIterator!(const(ubyte)[]) {
+			override Promise!ItValue next(Promise!bool) {
+				if (contentLength == 0) {
+					return Promise!ItValue.resolved(ItValue(true));
+				}
 
-		return r;
+				ItValue result;
+				return inputTokenizer.read().each((chunk) {
+					contentLength -= chunk.length;
+					inputTokenizer.limit(contentLength);
+					result.value = chunk;
+					return false;
+				}).then((eof) => eof ? ItValue(true) : result);
+			}
+		};
 	}
 }
 unittest {
@@ -336,7 +347,7 @@ unittest {
 	bool called;
 
 	Exception err = new Exception("same");
-	auto headers = new PromiseIterator!Header;
+	auto headers = new DelegatePromiseIterator!Header;
 	headers.reject(err);
 	(new Client()).sendHeaders(headers).then(() {
 		assert(false);
@@ -436,7 +447,7 @@ unittest {
 	responseData
 		.as!ubyte
 		.toAsyncChunks(13)
-		.each((chunk) => a.writeToRead(chunk))
+		.each((chunk) => a.writeToRead(chunk).then(() {}))
 		.then((_) => a.writeToRead())
 		.nothrow_();
 
@@ -484,8 +495,7 @@ unittest {
 	responseData
 		.as!ubyte
 		.toAsyncChunks(11)
-		.each((chunk) => a.writeToRead(chunk))
-		.then((_) => a.writeToRead())
+		.each((chunk) => a.writeToRead(chunk).then((){}))
 		.nothrow_();
 
 	assert(response.statusCode == 200);
@@ -537,7 +547,7 @@ Response response;
 	responseData
 		.as!ubyte
 		.toAsyncChunks(11)
-		.each((chunk) => a.writeToRead(chunk))
+		.each((chunk) => a.writeToRead(chunk).then((){}))
 		.then((_) => a.writeToRead())
 		.nothrow_();
 

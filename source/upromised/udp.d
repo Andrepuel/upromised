@@ -1,15 +1,16 @@
 module upromised.udp;
 import deimos.libuv.uv : uv_buf_t, uv_loop_t, uv_udp_t;
+import std.exception : enforce;
 import std.socket : Address;
 import upromised.memory : gcrelease, gcretain, getSelf;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromise, Promise, PromiseIterator;
 import upromised.stream : Datagram, DatagramStream, Interrupted;
 import upromised.uv : uvCheck, UvError;
 
 class UdpSocket : DatagramStream {
 private:
-	Promise!void closePromise;
-	PromiseIterator!Datagram readPromise;
+	DelegatePromise!void closePromise;
+	DelegatePromise!Datagram readPromise;
 
 public:
 	uv_udp_t self;
@@ -50,7 +51,7 @@ public:
 		return r;
 	}
 
-	private class SendPromise : Promise!void {
+	private class SendPromise : DelegatePromise!void {
 		import deimos.libuv.uv : uv_udp_send_t;
 
 		Address dest;
@@ -60,57 +61,43 @@ public:
 
 	override PromiseIterator!Datagram recvFrom() nothrow {
 		import std.algorithm : swap;
-
-		if (readPromise is null) {
-			readPromise = new PromiseIterator!Datagram;
-			int err = readOne();
-			if (err.uvCheck(readPromise)) {
-				PromiseIterator!Datagram empty;
-				swap(empty, readPromise);
-				return empty;
-			}
-		}
-		return readPromise;
-	}
-	private int readOne() nothrow {
 		import deimos.libuv.uv : uv_udp_recv_stop, uv_udp_recv_start;
-		import std.algorithm : swap;
 		import upromised.dns : toAddress;
 		import upromised.uv_stream : readAlloc, shrinkBuf;
 
-		if (closePromise !is null) {
-			return 0;
-		}
-
-		return uv_udp_recv_start(&self, &readAlloc, (selfArg, nread, buf, addr, flags) nothrow {
-			auto self = selfArg.getSelf!UdpSocket;
-
-			if (buf.base !is null) gcrelease(buf.base);
-
-			if (addr == null) {
-				return;
-			}
-
-			if (nread < 0) {
-				typeof(self.readPromise) gone;
-				swap(gone, self.readPromise);
-				gone.reject(new UvError(cast(int)nread));
-				return;
-			}
-
-
-			auto base = shrinkBuf(buf, nread);
-			uv_udp_recv_stop(&self.self);
-			self.readPromise.resolve(Datagram(addr.toAddress, cast(ubyte[])base)).then((cont) {
-				if (cont) {
-					self.readOne().uvCheck();
+		return new class PromiseIterator!Datagram {
+			override Promise!ItValue next(Promise!bool) {
+				if (closePromise !is null) {
+					return Promise!ItValue.resolved(ItValue(true));
 				}
-			}).except((Exception e) { 
-				if (self.readPromise) {
-					self.readPromise.reject(e);
-				}
-			}).nothrow_();
-		});
+
+
+				enforce(readPromise is null, "Already reading");
+				readPromise = new DelegatePromise!Datagram;
+				uv_udp_recv_start(&self, &readAlloc, (selfArg, nread, buf, addr, flags) nothrow {
+					auto self = selfArg.getSelf!UdpSocket;
+					uv_udp_recv_stop(&self.self);
+
+					if (buf.base !is null) gcrelease(buf.base);
+
+					if (self.readPromise is null) {
+						return;
+					}
+
+					if (nread < 0) {
+						self.readPromise.reject(new UvError(cast(int)nread));
+						return;
+					}
+
+					auto base = shrinkBuf(buf, nread);
+					self.readPromise.resolve(Datagram(addr.toAddress, cast(const(ubyte)[])base));
+				}).uvCheck(readPromise);
+				
+				return readPromise.finall(() {
+					readPromise = null;
+				}).then((datagram) => datagram.addr is null ? ItValue(true) : ItValue(false, datagram));
+			}
+		};
 	}
 
 	override Promise!void close() nothrow {
@@ -122,7 +109,7 @@ public:
 			readPromise.reject(new Interrupted);
 		}
 
-		closePromise = new Promise!void;
+		closePromise = new DelegatePromise!void;
 		uv_close(self.handle, (selfArg) nothrow {
 			auto self = selfArg.getSelf!UdpSocket;
 			self.closePromise.resolve();

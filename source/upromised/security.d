@@ -3,7 +3,7 @@ version(hasSecurity):
 import std.exception : enforce;
 import std.format : format;
 import upromised.promise : Promise, PromiseIterator;
-import upromised.stream : ReadoneStream, Stream;
+import upromised.stream : Stream;
 
 extern (C) {
 	enum OSStatus {
@@ -55,7 +55,7 @@ private Promise!T readOne(T)(PromiseIterator!T read) nothrow {
 	}).then((_) => r);
 }
 
-class TlsStream : ReadoneStream {
+class TlsStream : Stream {
 private:
 	Stream underlying;
 	SSLContext* context;
@@ -177,20 +177,25 @@ public:
 		});
 	}
 
+	override PromiseIterator!(const(ubyte)[]) read() nothrow {
+		return new class PromiseIterator!(const(ubyte)[]) {
+			override Promise!ItValue next(Promise!bool) {
+				return readOne().then((chunk) => chunk ? ItValue(false, chunk) : ItValue(true));
+			}
+		};
+	}
 protected:
-	override void readOne() nothrow {
-		readOne(new ubyte[1024])
-		.then((chunk) {
-			readOneData(chunk);
+	Promise!(const(ubyte)[]) readOne() nothrow {
+		const(ubyte)[] r;
+		return readOne(new ubyte[1024])
+		.then((chunk) nothrow {
+			r = chunk;
 		}).except((OSStatusError e) {
 			if (e.status == -9805) {
-				readOneData(null);
 			} else {
 				throw e;
 			}
-		}).except((Exception e) {
-			rejectOneData(e);
-		});
+		}).then(() => r);
 	}
 
 	Promise!(const(ubyte)[]) readOne(ubyte[] data) nothrow {

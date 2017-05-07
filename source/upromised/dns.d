@@ -2,7 +2,7 @@ module upromised.dns;
 import deimos.libuv.uv : uv_getaddrinfo, uv_getaddrinfo_t, uv_freeaddrinfo, uv_loop_t;
 import deimos.libuv._d : addrinfo;
 import std.socket : Address;
-import upromised.promise : Promise;
+import upromised.promise : DelegatePromise, Promise;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck;
 version(Posix) {
@@ -23,7 +23,9 @@ Address[] toAddress(const(addrinfo)* each) nothrow {
 Address toAddress(const(sockaddr)* each, size_t len = 16) nothrow {
 	import std.socket : AddressFamily, InternetAddress, Internet6Address, UnknownAddressReference;
 
-	if (each.sa_family == AddressFamily.INET) {
+	if (each is null) {
+		return null;
+	} else if (each.sa_family == AddressFamily.INET) {
 		return new InternetAddress(*cast(sockaddr_in*)each);
 	} else if (each.sa_family == AddressFamily.INET6) {
 		return new Internet6Address(*cast(sockaddr_in6*)each);
@@ -61,7 +63,7 @@ Promise!(Address[]) getAddrinfo(uv_loop_t* ctx, const(char)[] node, const(char)[
 	r.finall(() => gcrelease(r));
 	return r;
 }
-private class GetAddrinfoPromise : Promise!(Address[]) {
+private class GetAddrinfoPromise : DelegatePromise!(Address[]) {
 	const(char)* node;
 	const(char)* service;
 	uv_getaddrinfo_t self;

@@ -1,6 +1,6 @@
 module upromised.tcp;
 import upromised.stream : Stream;
-import upromised.promise : PromiseIterator, Promise;
+import upromised.promise : DelegatePromise, DelegatePromiseIterator, PromiseIterator, Promise;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck, UvError;
 import upromised.uv_stream : UvStream;
@@ -23,7 +23,7 @@ private sockaddr* upcast(ref sockaddr_in self) nothrow {
 
 class TcpSocket : UvStream!uv_tcp_t {
 private:
-	PromiseIterator!TcpSocket listenPromise;
+	DelegatePromiseIterator!TcpSocket listenPromise;
 
 public:
 	this(uv_loop_t* ctx) {
@@ -43,7 +43,7 @@ public:
 		import upromised.uv : stream;
 
 		assert(listenPromise is null);
-		listenPromise = new PromiseIterator!TcpSocket;
+		listenPromise = new DelegatePromiseIterator!TcpSocket;
 		auto err = uv_listen(self.stream, backlog, (selfSelf, status) nothrow {
 			Promise!void.resolved().then(() {
 				auto self = getSelf!TcpSocket(selfSelf);
@@ -53,13 +53,13 @@ public:
 				self.listenPromise.resolve(conn);
 			}).except((Exception e) {
 				auto self = getSelf!TcpSocket(selfSelf);
-				PromiseIterator!TcpSocket failed;
+				DelegatePromiseIterator!TcpSocket failed;
 				swap(failed, self.listenPromise);
 				failed.reject(e);
 			}).nothrow_();
 		});
         if (err.uvCheck(listenPromise)) {
-            PromiseIterator!TcpSocket r;
+            DelegatePromiseIterator!TcpSocket r;
             swap(r, listenPromise);
             return r;
         }
@@ -89,7 +89,7 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	private class ConnectPromise : Promise!void {
+	private class ConnectPromise : DelegatePromise!void {
 		Address addr;
 		uv_connect_t self;
 	}

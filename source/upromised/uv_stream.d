@@ -3,7 +3,7 @@ import deimos.libuv.uv;
 import deimos.libuv._d;
 import std.exception : enforce;
 import upromised.memory : gcrelease, gcretain, getSelf;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromise, Promise, PromiseIterator;
 import upromised.stream : Interrupted, Stream;
 import upromised.uv : uvCheck, UvError;
 
@@ -23,8 +23,8 @@ const(char)[] shrinkBuf(const(uv_buf_t)* buf, size_t len) nothrow {
 
 class UvStream(SELF) : Stream {
 private:
-	Promise!void closePromise;
-	PromiseIterator!(const(ubyte)[]) readPromise;
+	DelegatePromise!void closePromise;
+	DelegatePromise!(const(ubyte)[]) readPromise;
 
 protected:
 	uv_loop_t* ctx;
@@ -42,49 +42,38 @@ public:
 		import upromised.uv : stream;
 
 		auto self = getSelf!UvStream(selfSelf);
+		if (buf.base !is null) gcrelease(buf.base);
+		uv_read_stop(self.self.stream);
+		
 		if (nread == uv_errno_t.UV_EOF) {
-			typeof(self.readPromise) gone;
-			swap(gone, self.readPromise);
-			gone.resolve();
+			self.readPromise.resolve(null);
 			return;
 		}
 
-		if (buf.base !is null) gcrelease(buf.base);
-
 		if (nread <= 0) {
-			typeof(self.readPromise) gone;
-			swap(gone, self.readPromise);
-			gone.reject(new UvError(cast(int)nread));
+			self.readPromise.reject(new UvError(cast(int)nread));
 			return;
 		}
 
 		auto base = shrinkBuf(buf, nread);
-		
-		uv_read_stop(self.self.stream);
-		assert(self.readPromise !is null);
-		self.readPromise.resolve(cast(ubyte[])base).then((_) {
-			uv_read_start(self.self.stream, &readAlloc, &readCb).uvCheck();
-		}).except((Exception e) { 
-			if (self.readPromise) {
-				self.readPromise.reject(e);
-			}
-		}).nothrow_();
+		self.readPromise.resolve(cast(ubyte[])base);
 	}
 
 	override PromiseIterator!(const(ubyte)[]) read() nothrow {
 		import std.algorithm : swap;
 		import upromised.uv : stream;
 
-		if (readPromise is null) {
-			readPromise = new PromiseIterator!(const(ubyte)[]);
-			int err = uv_read_start(self.stream, &readAlloc, &readCb);
-			if (err.uvCheck(readPromise)) {
-				PromiseIterator!(const(ubyte)[]) r;
-				swap(r, readPromise);
-				return r;
+		return new class PromiseIterator!(const(ubyte)[]) {
+			override Promise!ItValue next(Promise!bool) {
+				enforce(readPromise is null, "Already reading");
+				readPromise = new DelegatePromise!(const(ubyte)[]);
+
+				uv_read_start(self.stream, &readAlloc, &readCb).uvCheck(readPromise);
+				return readPromise.finall(() {
+					readPromise = null;
+				}).then((chunk) => chunk ? ItValue(false, chunk) : ItValue(true));
 			}
-		}
-		return readPromise;
+		};
 	}
 
 	override Promise!void write(immutable(ubyte)[] data) nothrow {
@@ -106,7 +95,7 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	private class WritePromise : Promise!void {
+	private class WritePromise : DelegatePromise!void {
 		uv_write_t self;
 		uv_buf_t data;
 	}
@@ -128,7 +117,7 @@ public:
 		r.finall(() => gcrelease(r));
 		return r;
 	}
-	private class ShutdownPromise : Promise!void {
+	private class ShutdownPromise : DelegatePromise!void {
 		uv_shutdown_t self;
 	}
 
@@ -143,7 +132,7 @@ public:
 			gone.reject(new Interrupted);
 		}
 
-		closePromise = new Promise!void;
+		closePromise = new DelegatePromise!void;
 		uv_close(self.handle, (selfSelf) nothrow {
 			auto self = getSelf!UvStream(selfSelf);
 			self.closePromise.resolve();

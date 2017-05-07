@@ -1,8 +1,8 @@
 module upromised.tls;
 version (hasOpenssl):
 import deimos.openssl.ssl;
-import upromised.stream : Stream, ReadoneStream;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.stream : Stream;
+import upromised.promise : DelegatePromise, Promise, PromiseIterator;
 import upromised : fatal;
 import std.exception : enforce;
 import std.format : format;
@@ -163,9 +163,9 @@ class OpensslError : Exception {
         auto errNum = ERR_get_error();
         if (errNum != 0) {
             msg = ERR_error_string(errNum, null).fromStringz.idup;
-    }
+        }
         super("OpensslError ret=%s err=%s, msg %s".format(ret, err, msg), file, line);
-}
+    }
 }
 
 class UnderlyingShutdown : Exception {
@@ -198,7 +198,7 @@ public:
     }
 }
 
-class TlsStream : ReadoneStream {
+class TlsStream : Stream {
 private:
     Stream underlying;
     TlsContext ctx;
@@ -232,45 +232,46 @@ private:
     }
 
     Promise!int operate(alias a, Args...)(Args args) nothrow {
-        auto r = new Promise!int;
-        void delegate() nothrow tryOne;
-        tryOne = () nothrow {
-            Promise!void.resolved().then(() {
-                Want want = tryOperate!a(args);
+        Promise!int tryOne() {
+            int r;
+            Want want = tryOperate!a(args);
 
-                return Promise!void.resolved().then(() {
-                    auto toWrite = tlsWrite.read();
-                    if (toWrite.length > 0) {
-                        return underlying.write(toWrite);
-                    } else {
-                        return Promise!void.resolved();
-                    }
-                }).then(() {
-                    if (want >= Want.Success) {
-                        r.resolve(want);
-                        return Promise!bool.resolved(false);
-                    }
+            return Promise!void.resolved().then(() {
+                auto toWrite = tlsWrite.read();
+                if (toWrite.length > 0) {
+                    return underlying.write(toWrite);
+                } else {
+                    return Promise!void.resolved();
+                }
+            }).then(() {
+                if (want >= Want.Success) {
+                    r = want;
+                    return Promise!bool.resolved(false);
+                }
 
-                    if (want == Want.Read) {
-                        return underlying.read().each((data) {
-                            tlsRead.write(data);
-                            return false;
-                        }).then((a) {
-                            if (a) throw new UnderlyingShutdown;
-                            return true;
-                        });
-                    }
-                    assert(want == Want.Write);
+                if (want == Want.Read) {
+                    return underlying.read().each((data) {
+                        tlsRead.write(data);
+                        return false;
+                    }).then((a) {
+                        if (a) {
+                            throw new UnderlyingShutdown;
+                        }
+                        return true;
+                    });
+                }
+                assert(want == Want.Write);
 
-                    return Promise!bool.resolved(true);
-                });
+                return Promise!bool.resolved(true);
             }).then((repeat) {
-                if (repeat) tryOne();
-            }).except((Exception e) => r.reject(e))
-            .nothrow_();
-        };
-        tryOne();
-        return r;
+                if (repeat) {
+                    return tryOne();
+                } else {
+                    return Promise!int.resolved(r);
+                }
+            });
+        }
+        return Promise!void.resolved().then(() => tryOne());
     }
 
     
@@ -339,22 +340,31 @@ public:
         return operate!(SSL_shutdown,).then((a) => underlying.shutdown);
     }
 
+    override PromiseIterator!(const(ubyte)[]) read() nothrow {
+        return new class PromiseIterator!(const(ubyte)[]) {
+            override Promise!ItValue next(Promise!bool) {
+                return readOne()
+                .then((chunk) => chunk ? ItValue(false, chunk) : ItValue(true));
+            }
+        };
+    }
+
     override Promise!void close() nothrow {
         return underlying.close();
     }
 protected:
-    override void readOne() nothrow {
+    Promise!(const(ubyte)[]) readOne() nothrow {
         import std.algorithm : swap;
 
-        operate!(SSL_read)(readBuffer.ptr, cast(int)readBuffer.length).then((int read) {
-            readOneData(readBuffer[0..read]);
+        const(ubyte)[] r;
+        return operate!(SSL_read)(readBuffer.ptr, cast(int)readBuffer.length).then((int read) {
+            r = readBuffer[0..read];
         }).except((Exception e) {
             if ((cast(UnderlyingShutdown)e) !is null) {
-                readOneData(null);
             } else {
-                rejectOneData(e);
+                throw e;
             }
-        }).nothrow_();
+        }).then(() => r);
     }
 }
 

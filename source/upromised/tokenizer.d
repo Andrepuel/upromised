@@ -1,5 +1,5 @@
 module upromised.tokenizer;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromiseIterator, Promise, PromiseIterator;
 import upromised.stream : Stream;
 import upromised : fatal;
 
@@ -40,14 +40,18 @@ public:
 
     PromiseIterator!(T[]) read() nothrow {
         if (read_ is null) {
-            read_ = new PromiseIterator!(T[]);
-            readOne();
+            read_ = new class PromiseIterator!(T[]) {
+                override Promise!ItValue next(Promise!bool) {
+                    return readOne()
+                    .then((chunk) => chunk ? ItValue(false, chunk) : ItValue(true));
+                }
+            };
         }
         return read_;
     }
 
 protected:
-    void readOne() nothrow {
+    Promise!(T[]) readOne() nothrow {
         ptrdiff_t posClosed = -1;
         if (separator_.length > 0) {
             posClosed = buffer.countUntilPartial(separator_);
@@ -59,53 +63,40 @@ protected:
             if (posOpen <= buffer.length) {
                 auto output = buffer[0..posOpen];
                 buffer = buffer[posOpen..$];
-                read_.resolve(output).then((_) => readOne()).nothrow_();
-                return;
+                return Promise!(T[]).resolved(output);
             }
             // Found part of the separator on end of buffer
             if (posOpen > buffer.length && partialReceive_ && posClosed > 0) {
                 auto output = buffer[0..posClosed];
                 buffer = buffer[posClosed..$];
-                read_.resolve(output).then((_) => readOne()).nothrow_();
-                return;
+                return Promise!(T[]).resolved(output);
             }
         } else if (limit_ > 0 && buffer.length >= limit_) {
             auto output = buffer[0..limit_];
             buffer = buffer[limit_..$];
-            read_.resolve(output).then((_) => readOne()).nothrow_();
-            return;
+            return Promise!(T[]).resolved(output);
         } else if (partialReceive_ && buffer.length > 0) {
             auto output = buffer;
             buffer = null;
-            read_.resolve(output).then((_) => readOne()).nothrow_();
-            return;
+            return Promise!(T[]).resolved(output);
         }
 
         if (underlyingEof) {
             auto output = buffer;
             buffer = null;
-            if (output.length > 0) {
-                read_.resolve(output).then((_) => readOne()).nothrow_();
-            } else {
-                read_.resolve();
-            }
-            return;
+            return Promise!(T[]).resolved(output);
         }
 
-        underlying.each((data) {
+        return underlying.each((data) {
             buffer ~= data;
             return false;
         }).then((eof) {
             underlyingEof = eof;
-        }).then(() {
-            readOne();
-        }).except((Exception e) {
-            return read_.reject(e).then((_) {});
-        }).nothrow_();
+        }).then(() => readOne());
     }
 }
 unittest {
-    auto a = new PromiseIterator!(const(ubyte)[]);
+    auto a = new DelegatePromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer!(const(ubyte))(a);
     bool called = false;
     bool eof = false;
@@ -123,7 +114,7 @@ unittest {
     assert(eof);
 }
 unittest {
-    auto a = new PromiseIterator!(const(ubyte)[]);
+    auto a = new DelegatePromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer!(const(ubyte))(a);
     b.separator("\r\n");
     b.limit();
@@ -150,7 +141,7 @@ unittest {
     assert(call == 4);
 }
 unittest {
-    auto a = new PromiseIterator!(const(ubyte)[]);
+    auto a = new DelegatePromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer!(const(ubyte))(a);
     b.separator();
     b.limit(3);
@@ -181,7 +172,7 @@ unittest {
     assert(call == 4);
 }
 unittest {
-    auto a = new PromiseIterator!(const(ubyte)[]);
+    auto a = new DelegatePromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer!(const(ubyte))(a);
     b.separator();
     b.limit(3);
@@ -209,7 +200,7 @@ unittest {
     assert(call == 3);
 }
 unittest {
-    auto a = new PromiseIterator!(const(ubyte)[]);
+    auto a = new DelegatePromiseIterator!(const(ubyte)[]);
     auto b = new Tokenizer!(const(ubyte))(a);
     b.separator("ABCD");
     b.limit();

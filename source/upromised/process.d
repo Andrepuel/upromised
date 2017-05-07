@@ -4,7 +4,7 @@ import deimos.libuv.uv : uv_loop_t, uv_process_t;
 import upromised.loop : Loop;
 import upromised.memory : gcrelease, gcretain, getSelf;
 import upromised.pipe : Pipe;
-import upromised.promise : Promise;
+import upromised.promise : DelegatePromise, Promise;
 import upromised.uv : handle, stream, uvCheck;
 
 shared static this() {
@@ -15,7 +15,7 @@ shared static this() {
 
 class Process {
 private:
-	Promise!long wait_;
+	DelegatePromise!long wait_;
 
 public:
 	__gshared Pipe STDIN;
@@ -40,7 +40,7 @@ public:
 		import std.stdio : File;
 		import std.string : toStringz;
 
-		wait_ = new Promise!long;
+		wait_ = new DelegatePromise!long;
 		uv_process_options_t options;
 		options.exit_cb = (self, exit_status, term_signal) nothrow {
 			self.getSelf!Process.wait_.resolve(exit_status);

@@ -1,15 +1,15 @@
 module upromised.manual_stream;
 import upromised.stream : Stream;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromiseIterator, Promise, PromiseIterator;
 
 class ManualStream : Stream {
 private:
-    PromiseIterator!(const(ubyte)[]) read_;
-    PromiseIterator!(const(ubyte)[]) write_;
+    DelegatePromiseIterator!(const(ubyte)[]) read_;
+    DelegatePromiseIterator!(const(ubyte)[]) write_;
 
 public:
     this() {
-        write_ = new PromiseIterator!(const(ubyte)[]);
+        write_ = new DelegatePromiseIterator!(const(ubyte)[]);
     }
 
     override Promise!void close() nothrow {
@@ -22,34 +22,29 @@ public:
     }
 
     override PromiseIterator!(const(ubyte)[]) read() nothrow {
-        assert(read_ is null);
-        read_ = new PromiseIterator!(const(ubyte)[]);
+        if (read_ is null) {
+            read_ = new DelegatePromiseIterator!(const(ubyte)[]);
+        }
         return read_;
     }
 
     Promise!bool writeToRead(const(ubyte)[] data) nothrow {
         return Promise!void.resolved().then(() {
             assert(read_ !is null);
-            auto late = new Promise!bool;
-            auto r = late.then((cont) {
-                if (!cont) {
-                    read_ = null;
-                }
+            return read_.resolve(data).then((cont) {
                 return cont;
             });
-            read_.resolve(data, late);
-            return r;
         });
     }
     
-    void writeToRead() nothrow {
+    Promise!bool writeToRead() nothrow {
         assert(read_ !is null);
-        read_.resolve();
+        return read_.resolve();
     }
 
-    void writeToRead(Exception e) nothrow {
+    Promise!bool writeToRead(Exception e) nothrow {
         assert(read_ !is null);
-        read_.reject(e);
+        return read_.reject(e);
     }
 
     override Promise!void write(immutable(ubyte)[] r) nothrow {
@@ -72,8 +67,10 @@ unittest {
     assert(called);
 }
 unittest {
+    import upromised.promise : DelegatePromise;
+
     auto a = new ManualStream;
-    auto delayed = new Promise!bool;
+    auto delayed = new DelegatePromise!bool;
     bool called1, called2;
     
     a.write(cast(immutable(ubyte)[])"Hello world").then(() {

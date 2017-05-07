@@ -2,254 +2,283 @@ module upromised.promise;
 
 import std.format : format;
 
-struct DebugInfo {
-    string file;
-    size_t line;
-    Promise_ parent;
+interface Promise_ {
+	struct DebugInfo {
+		string file;
+		size_t line;
+		Promise_ parent;
 
-    // Remarks: Printing a Promise per line ensures that
-    // something will get printed even in case of memory corruption
-    void printAll() nothrow {
-        import std.stdio : stderr;
+		// Remarks: Printing a Promise per line ensures that
+		// something will get printed even in case of memory corruption
+		void printAll() nothrow {
+			import std.stdio : stderr;
 
-        try { stderr.writeln(file, ":", line); } catch(Exception){}
-        if (parent !is null) parent.info.printAll();
-    }
+			try { stderr.writeln(file, ":", line); } catch(Exception){}
+			if (parent !is null) parent.info.printAll();
+		}
+	}
+
+	DebugInfo info() nothrow;
+
+	final protected void fatal() nothrow {
+		import std.stdio : stderr;
+		
+		try { stderr.writeln("Fatal error"); } catch(Exception){}
+		info.printAll();
+	}
 }
 
 void fatal(Exception e = null, string file = __FILE__, ulong line = __LINE__) nothrow {
-    import core.stdc.stdlib : abort;
-    import std.stdio : stderr;
-    try {
-        stderr.writeln("%s(%s): Fatal error".format(file, line));
-        if (e) {
-            stderr.writeln(e);
-        }
-    } catch(Exception) {
-        abort();
-    }
-    abort();
+	import core.stdc.stdlib : abort;
+	import std.stdio : stderr;
+	try {
+		stderr.writeln("%s(%s): Fatal error".format(file, line));
+		if (e) {
+			stderr.writeln(e);
+		}
+	} catch(Exception) {
+		abort();
+	}
+	abort();
 }
 
 template Promisify(T) {
-    static if (is(T : Promise_)) {
-        alias Promisify = T;
-    } else {
-        alias Promisify = Promise!T;
-    }
+	static if (is(T : Promise_)) {
+		alias Promisify = T;
+	} else {
+		alias Promisify = Promise!T;
+	}
 }
 static assert(is(Promisify!int == Promise!int));
 static assert(is(Promisify!(Promise!int) == Promise!int));
 static assert(is(Promisify!void == Promise!void));
 
-private void chainPromise(alias b, R, Args...)(Promise!R t, Args args) nothrow {
-    scope(failure) {
-        import std.stdio : stderr;
-        
-        try { stderr.writeln("Fatal error"); } catch(Exception){}
-        t.info.printAll();
-    }
-
-    try {
-        static if(is(typeof(b(args)) : Promise_)) {
-            auto intermediary = b(args);
-            static if (is(R == void)) {
-                intermediary.then(() => t.resolve());
-            } else {
-                intermediary.then((a) => t.resolve(a));
-            }
-            intermediary.except((Exception e) => t.reject(e));
-        } else {
-            static if (is(R == void)) {
-                b(args);
-                t.resolve();
-            } else {
-                t.resolve(b(args));
-            }
-        }
-    } catch(Exception e) {
-        t.reject(e);
-    }
+auto promisify(T)(T a) nothrow {
+	static if (is(T : Promise_)) {
+		return a;
+	} else {
+		return Promise!T.resolved(a);
+	}
+}
+auto promisifyCall(T, U...)(T a, U b) nothrow {
+	static if (is(typeof(a(b)) == void)) {
+		try {
+			a(b);
+			return Promise!void.resolved();
+		} catch(Exception e) {
+			return Promise!void.rejected(e);
+		}
+	} else {
+		try {
+			return promisify(a(b));
+		} catch(Exception e) {
+			return typeof(promisify(a(b))).rejected(e);
+		}
+	}
 }
 
-class Promise_ {
-public:
-    DebugInfo info;
+interface Promise(T_) : Promise_ {
+	import std.typecons : Tuple;
 
-protected:
-    Exception rejected_;
+	alias T = T_;
 
-    void resolveExceptOne(R,E)(Promise!void r, R delegate(E) cb) nothrow
-    if (is(Promisify!R == Promise!void))
-    {
-        if (rejected_ is null) {
-            r.resolve();
-        } else {
-            E err = cast(E) rejected_;
-            if (err) {
-                chainPromise!cb(r, err);
-            } else {
-                r.reject(rejected_);
-            }
-        }
-    }
+	static if (is(T == void)) {
+		alias Types = Tuple!();
+		template Then(U) {
+			alias Then = U delegate();
+		}
+	} else {
+		alias Types = Tuple!(T);
+		template Then(U) {
+			alias Then = U delegate(T);
+		}
+	}
+
+	struct Value {
+		this(Exception e) {
+			this.e = e;
+		}
+
+		static if (!is(T == void)) {
+			this(Exception e, T value) {
+				this.e = e;
+				this.value[0] = value;
+			}
+		}
+
+		Exception e;
+		Types value;
+	}
+	
+	static if (is(T == void)) {
+		Promisify!U then(U)(U delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+			return then2!U(cb, file, line);
+		}
+	} else {
+		Promisify!U then(U)(U delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+			return then2!U(cb, file, line);
+		}
+
+		Promisify!U then(U)(U delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+			return then2!U((_) => cb(), file, line);
+		}
+	}
+
+	protected Promisify!U then2(U)(Then!U cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+		auto r = new DelegatePromise!(Promisify!U.T)(this, file, line);
+		then_((value) nothrow {
+			if (value.e !is null) {
+				r.reject(value.e);
+			} else {
+				scope(failure) r.fatal();
+				promisifyCall(cb, value.value.expand).then_((v) nothrow {
+					r.resolve(v);
+				});
+			}
+		});
+		return r;
+	}
+
+	Promise!void except(E,U)(U delegate(E e) cb, string file = __FILE__, size_t line = __LINE__) nothrow
+	if (is(Promisify!U.T == void) && is (E : Exception))
+	{
+		auto r = new DelegatePromise!void(this, file, line);
+		then_((value) nothrow {
+			scope(failure) r.fatal();
+			if (value.e !is null) {
+				E e = cast(E)value.e;
+				if (e !is null) {
+					promisifyCall(cb, e).then_((value) nothrow {
+						r.resolve(value);
+					});
+				} else {
+					r.reject(value.e);
+				}
+			} else {
+				r.resolve();
+			}
+		});
+		return r;
+	}
+
+	auto finall(U2)(U2 delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+		static if (is(Promisify!U2.T == void)) {
+			alias U = T;
+		} else {
+			alias U = U2;
+		}
+		auto r = new DelegatePromise!(Promisify!U.T)(this, file, line);
+		then_((value) nothrow {
+			scope(failure) r.fatal();
+			promisifyCall(cb).then_((value2) nothrow {
+				Promisify!U.Value value3;
+				value3.e = value2.e is null ? value.e : value2.e;
+				static if (is(Promisify!U2.T == void)) {
+					static if (!is(Promisify!U.T == void)) {
+						value3.value = value.value;
+					}
+				} else {
+					value3.value = value2.value;
+				}
+
+				r.resolve(value3);
+			});
+		});
+		return r;
+	}
+
+	static if (is(T == void)) {
+		static Promise!T resolved(string file = __FILE__, size_t line = __LINE__) nothrow {
+			return resolved_(Value(null), file, line);
+		}
+	} else {
+		static Promise!T resolved(T t, string file = __FILE__, size_t line = __LINE__) nothrow {
+			return resolved_(Value(null, t), file, line);
+		}
+	}
+	protected static Promise!T resolved_(Value value, string file = __FILE__, size_t line = __LINE__) {
+		return new class Promise!T {
+			override void then_(void delegate(Value) nothrow cb) nothrow {
+				cb(value);
+			}
+
+			override DebugInfo info() nothrow {
+				return DebugInfo(file, line);
+			}
+		};
+	}
+
+	static Promise!T rejected(Exception e, string file = __FILE__, size_t line = __LINE__) nothrow {
+		return new class Promise!T {
+			override void then_(void delegate(Value) nothrow cb) nothrow {
+				cb(Value(e));
+			}
+
+			override DebugInfo info() nothrow {
+				return DebugInfo(file, line);
+			}
+		};
+	}
+
+	final Promise!void nothrow_(string file = __FILE__, size_t line = __LINE__) nothrow {
+		return except((Exception e) => .fatal(e, file, line), file, line);
+	}
+
+	protected void then_(void delegate(Value) nothrow cb) nothrow;
 }
-class PromiseBase(T...) : Promise_ {
-private:
-    import std.typecons : Tuple;
-    alias Types_ = T;
-    Tuple!T resolved_;
-    bool isResolved_;
-    void delegate() nothrow[] then_;
 
-    void resolveOne(R,J,U...)(Promise!R r, J delegate(U) cb) nothrow
-    if(is(Promisify!J == Promise!R) && is(U == Types_))
-    {
-        if (rejected_ !is null) {
-            r.reject(rejected_);
-            return;
+class DelegatePromise(T) : Promise!T {
+	DebugInfo info_;
+
+	bool resolved;
+	Value result;
+	void delegate(Value) nothrow[] pending;
+
+	this(Promise_ parent = null, string file = __FILE__, size_t line = __LINE__) nothrow {
+		info_ = DebugInfo(file, line, parent);
+	}
+
+	override DebugInfo info() nothrow {
+		return info_;
+	}
+
+	override void then_(void delegate(Value) nothrow cb) nothrow {
+		if (resolved) {
+			cb(result);
+		} else {
+			pending ~= cb;
+		}
+	}
+
+	void resolve(Value value) nothrow {
+        if (resolved) {
+            info.printAll();
         }
 
-        chainPromise!cb(r, resolved_.expand);
-    }
+		assert(!resolved);
+		result = value;
+		resolved = true;
+		foreach(cb; pending) {
+			cb(result);
+		}
+		pending = null;
+	}
 
-    void resolveFinallyOne(R,J)(Promise!R r, J delegate() cb) nothrow
-    if(is(Promisify!J == Promise!R))
-    {
-        import std.typecons : Tuple;
-        static if (is(R == void)) {
-            alias Rs = Tuple!().Types;
-        } else {
-            alias Rs = Tuple!R.Types;
-        }
-
-        auto r2 = new Promise!R;
-        chainPromise!cb(r2);
-        r2.then((Rs args) {
-            if (rejected_ !is null) {
-                r.reject(rejected_);
-            } else {
-                r.resolve(args);
-            }
-        });
-        r2.except((Exception e) => r.reject(e));
-    }
-
-    void resolveAll() nothrow {
-        while (then_.length > 0) {
-            auto next = then_[0];
-            then_ = then_[1..$];
-            next();
-        }
-    }
-
-    void thenPush(void delegate() nothrow cb) nothrow {
-        if (isResolved_) {
-            cb();
-        } else {
-            then_ ~= cb;
-        }
-    }
-
-protected:
-    Promisify!R thenBase(R,U...)(R delegate(U) cb, string file = __FILE__, size_t line = __LINE__) nothrow
-    if(is(U == Types_))
-    {
-        auto r = new Promisify!R();
-        r.info = DebugInfo(file, line, this);
-        thenPush(() => resolveOne(r, cb));
-        return r;
-    }
-
-    void resolveBase(Types_ value) nothrow
-    {
-        import std.typecons : tuple;
-
-        resolved_ = tuple(value);
-        isResolved_ = true;
-        resolveAll();
-    }
-
-public:
-    Promise!void except(R,E)(R delegate(E) cb, string file = __FILE__, size_t line = __LINE__) nothrow
-    if (is(Promisify!R == Promise!void) && is(E : Exception))
-    {
-        auto r = new Promise!void;
-        r.info = DebugInfo(file, line, this);
-        thenPush(() => resolveExceptOne(r, cb));
-        return r;
-    }
-
-    Promisify!R finall(R)(R delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-        auto r = new Promisify!R;
-        r.info = DebugInfo(file, line, this);
-        thenPush(() => resolveFinallyOne(r, cb));
-        return r;
-    }
-
-    void reject(Exception err) nothrow {
-        isResolved_ = true;
-        rejected_ = err;
-        resolveAll();
-    }
-
-    static auto resolved(Types_ t, string file = __FILE__, size_t line = __LINE__) nothrow {
-        static if (Types_.length == 0) {
-            auto r = new Promise!void;
-        } else {
-            auto r = new Promise!Types_;
-        }
-        r.resolve(t);
-        r.info = DebugInfo(file, line, null);
-        return r;
-    }
-
-    static auto rejected(Exception e, string file = __FILE__, size_t line = __LINE__) nothrow {
-        static if (Types_.length == 0) {
-            auto r = new Promise!void;
-        } else {
-            auto r = new Promise!Types_;
-        }
-        r.reject(e);
-        r.info = DebugInfo(file, line, null);
-        return r;
-    }
-
-    Promise!void nothrow_(string file = __FILE__, ulong line = __LINE__)  nothrow {
-        return except((Exception e) => fatal(e, file, line), file, line);
-    }
-}
-class Promise(T) : PromiseBase!T
-if (!is(T == void))
-{
-private:
-    alias T_ = T;
-
-public:
-    void resolve(T v) nothrow {
-        resolveBase(v);
-    }
-
-    Promisify!R then(R)(R delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-        return thenBase(cb, file, line);
-    }
-}
-class Promise(T) : PromiseBase!()
-if (is(T == void))
-{
-private:
-    alias T_ = void;
-
-public:
-    void resolve() nothrow {
-        resolveBase();
-    }
-    Promisify!R then(R)(R delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-        return thenBase!R(cb, file, line);
-    }
+	static if (is(T == void)) {
+		void resolve() nothrow {
+			resolve(Value());
+		}
+	} else {
+		void resolve(T value) nothrow {
+			resolve(Value(null, value));
+		}
+	}
+	void reject(Exception e) nothrow {
+		resolve(Value(e));
+	}
 }
 unittest { // Multiple then
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     int sum = 0;
     a.then((int a) { sum += a; });
     a.then((a) { sum += a; });
@@ -259,7 +288,7 @@ unittest { // Multiple then
     assert(sum == 6);
 }
 unittest { // Void promise
-    auto a = new Promise!void;
+    auto a = new DelegatePromise!void;
     bool called = false;
     a.then(() {
         called = true;
@@ -270,7 +299,7 @@ unittest { // Void promise
 }
 
 unittest { // Void Chaining
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     int sum = 0;
     a.then((a) {
         sum += a;
@@ -282,15 +311,15 @@ unittest { // Void Chaining
     assert(sum == 6);
 }
 unittest { // Chaining
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     int delayValue;
-    Promise!string delayed;
+    DelegatePromise!string delayed;
     string finalValue;
     
     a.then((a) {
         return a * 2;
     }).then((a) {
-        delayed = new Promise!string;
+        delayed = new DelegatePromise!string;
         delayValue = a;
         return delayed;
     }).then((a) {
@@ -303,7 +332,7 @@ unittest { // Chaining
     assert(finalValue == "2");
 }
 unittest { //Exceptions
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
 
     auto err = new Exception("yada");
     bool caught = false;
@@ -316,7 +345,7 @@ unittest { //Exceptions
     assert(caught);
 }
 unittest { //Exception chaining
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     class X : Exception {
         this() {
             super("X");
@@ -336,7 +365,7 @@ unittest { //Exception chaining
     assert(caught);
 }
 unittest {
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     auto err = new Exception("yada");
     bool caught = false;
     a.then((a) {
@@ -351,131 +380,114 @@ unittest {
     a.resolve(2);
     assert(caught);
 }
+// Finall propagates the other value
+unittest {
+	bool called;
+	Promise!void.resolved()
+	.then(() => 2)
+	.finall(() => 3)
+	.then((a) {
+		assert(a == 3);
+		return a;
+	}).finall(() {
+	}).then((a) {
+		assert(a == 3);
+		called = true;
+	}).nothrow_();
+	assert(called);
+}
 
-class PromiseIterator(T) {
-private:
-    import std.typecons : Tuple;
+interface PromiseIterator(T) {
+	struct ItValue {
+		bool eof;
+		T value;
+	}
+	Promise!ItValue next(Promise!bool done);
 
-    Tuple!(T, Exception, Promise!bool)[] resolved_;
-    bool end_;
-    Promise!bool delegate(T) nothrow each_;
-    Promise!bool eachThen_;  
+	final Promise!bool each(U)(U delegate(T) cb) nothrow
+	if (is(Promisify!U.T == void) || is(Promisify!U.T == bool))
+	{
+		Promise!bool repeat() nothrow {
+			static if (is(Promisify!U.T == void)) {
+				bool delegate() boolify = () => true;
+			} else {
+				bool delegate(bool) boolify = (bool a) => a;
+			}
 
-    static Promise!bool eachInvoke(R)(R delegate(T) cb, T t) nothrow
-    if (is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
-    {
-        auto r = new Promisify!R;
-        chainPromise!cb(r, t);
+			auto done = new DelegatePromise!bool;
+			return promisifyCall(&next, done).then((a) {
+				if (a.eof) {
+					done.resolve(false);
+					return Promise!bool.resolved(true);
+				} else {
+					return promisifyCall(cb, a.value).then(boolify).then((cont) {
+						done.resolve(cont);
+						if (cont) {
+							return repeat();
+						} else {
+							return Promise!bool.resolved(false);
+						}
+					});
+				}
+			});
+		}
 
-        static if (is(Promisify!R.T_ == void)) {
-            return r.then(() => true);
-        } else {
-            return r;
-        }
-    }
+		return repeat();
+	}
+}
+class DelegatePromiseIterator(T) : PromiseIterator!T {
+	import std.typecons : Tuple, tuple;
 
-    Promise!bool stop() nothrow {
-        import std.algorithm : swap;
+	alias Value = Promise!ItValue.Value;
+	Tuple!(DelegatePromise!ItValue, Promise!bool) pending;
+	Tuple!(Promise!ItValue, DelegatePromise!bool)[] buffer;
 
-        Promise!bool then;
-        swap(then, eachThen_);
-        each_ = null;
-        return then;
-    }
+	override Promise!ItValue next(Promise!bool done) {
+		if (buffer.length > 0) {
+			auto next = buffer[0];
+			buffer = buffer[1..$];
+			done.then_(a => next[1].resolve(a));
+			return next[0];
+		} else {
+			assert(pending[0] is null);
+			pending = tuple(new DelegatePromise!ItValue, done);
+			return pending[0];
+		}
+	}
 
-    void popResolved(bool cont) nothrow {
-        resolved_[0][2].resolve(cont);
-        resolved_ = resolved_[1..$];
-    }
+	Promise!bool resolve(T a) nothrow {
+		return resolve(Value(null, ItValue(false, a)));
+	}
 
-    void resolveOne() nothrow {
-        auto next = resolved_[0];
-        if (next[1] !is null) {
-            stop().reject(next[1]);
-            popResolved(false);
-            return;
-        }
+	Promise!bool resolve() nothrow {
+		return resolve(Value(null, ItValue(true)));
+	}
 
-        each_(resolved_[0][0]).then((cont) {
-            popResolved(cont);
-            if (!cont) {
-                stop().resolve(false);
-                return;
-            }
+	Promise!bool reject(Exception e) nothrow {
+		return resolve(Value(e));
+	}
 
-            if (resolved_.length > 0) {
-                resolveOne();
-                return;
-            }
+	Promise!bool resolve(Value a) nothrow {
+		auto cb = getPending;
+		if (cb[0]) {
+			cb[0].resolve(a);
+			return cb[1];
+		} else {
+			auto r = new DelegatePromise!bool;
+			buffer ~= tuple(Promise!ItValue.resolved_(a), r);
+			return r;
+		}
+	}
 
-            if (end_) {
-                eachThen_.resolve(true);
-                return;
-            }
-        }).except((Exception e) {
-            popResolved(false);
-            stop().reject(e);
-        });
-    }
-
-public:
-    void resolve(T a, Promise!bool r) nothrow {
-        import std.typecons : tuple;
-
-        assert(!end_);
-        resolved_ ~= tuple(a, Exception.init, r);
-        if (each_ && resolved_.length == 1) {
-            resolveOne();
-        }
-    }
-    Promise!bool resolve(T a, string file = __FILE__, size_t line = __LINE__) nothrow {
-        Promise!bool r = new Promise!bool;
-        r.info = DebugInfo(file, line, null);
-        resolve(a, r);
-        return r;
-    }
-
-    Promise!bool reject(Exception a, string file = __FILE__, size_t line = __LINE__) nothrow {
-        import std.typecons : tuple;
-
-        assert(!end_);
-        Promise!bool r = new Promise!bool;
-        r.info = DebugInfo(file, line, null);
-        resolved_ ~= tuple(T.init, a, r);
-        if (each_ && resolved_.length == 1) {
-            resolveOne();
-        }
-
-        return r;
-    }
-
-    void resolve() nothrow {
-        assert(!end_);
-        end_ = true;
-        if (eachThen_ && resolved_.length == 0) {
-            eachThen_.resolve(true);
-        }
-    }
-
-    Promise!bool each(R)(R delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow
-    if(is(Promisify!R == Promise!bool) || is(Promisify!R == Promise!void))
-    {
-        assert(each_ is null);
-        eachThen_ = new Promise!bool;
-        auto r = eachThen_;
-        each_ = (T t) => eachInvoke(cb, t);
-        if (resolved_.length > 0) {
-            resolveOne();
-        } else if (end_) {
-            eachThen_.resolve(true);
-        }
-        r.info = DebugInfo(file, line, null);
-        return r;
-    }
+	Tuple!(DelegatePromise!ItValue, Promise!bool) getPending() nothrow {
+		auto r = pending;
+		pending[0] = null;
+		return r;
+	}
 }
 
 unittest { //Iterator
-    PromiseIterator!int a = new PromiseIterator!int;
+    DelegatePromiseIterator!int a = new DelegatePromiseIterator!int;
     int sum = 0;
     a.resolve(1);
     assert(sum == 0);
@@ -493,7 +505,7 @@ unittest { //Iterator
     assert(sum == 0);
 }
 unittest { //Iterator catching
-    PromiseIterator!int a = new PromiseIterator!int;
+    DelegatePromiseIterator!int a = new DelegatePromiseIterator!int;
     auto err = new Exception("yada");
     bool caught = false;
     a.each((b) {
@@ -515,7 +527,7 @@ unittest { //Iterator catching
     assert(caught);
 }
 unittest { //Resolve done Promise
-    auto a = new PromiseIterator!int;
+    auto a = new DelegatePromiseIterator!int;
     bool done = false;
     a.resolve(2).then((a) {
         assert(!a);
@@ -527,9 +539,9 @@ unittest { //Resolve done Promise
     });
     assert(done);
     done = false;
-    Promise!bool delayed;
+    DelegatePromise!bool delayed;
     a.each((a) {
-        delayed = new Promise!bool;
+        delayed = new DelegatePromise!bool;
         return delayed;
     }).nothrow_();
     assert(!done);
@@ -552,7 +564,7 @@ unittest { //Resolve done Promise
     assert(done2);
 }
 unittest { // Rejecting iterator
-    auto a = new PromiseIterator!int;
+    auto a = new DelegatePromiseIterator!int;
     bool called = false;
     auto err = new Exception("yada");
     class X : Exception {
@@ -593,7 +605,7 @@ unittest { //Resolved and rejected promise constructor
     assert(called);
 }
 unittest { //Finally
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     auto called = [false,false,false];
     auto err = new Exception("yada");
     a.then((a) {
@@ -619,7 +631,7 @@ unittest { //Finally
     assert(called[2]);
 }
 unittest { //Finally might throw Exception
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     auto called = false;
     auto err = new Exception("yada");
     a.finall(() {
@@ -635,7 +647,7 @@ unittest { //Finally might throw Exception
     assert(called);
 }
 unittest { //Finally return promise
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     auto called = false;
     auto err = new Exception("yada");
     a.finall(() {
@@ -651,7 +663,7 @@ unittest { //Finally return promise
     assert(called);
 }
 unittest { //Return failed promise
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     auto called = false;
     auto err = new Exception("yada");
     a.then((a) {
@@ -667,7 +679,7 @@ unittest { //Return failed promise
     assert(called);
 }
 unittest { //Finally returning a value
-    auto a = new Promise!int;
+    auto a = new DelegatePromise!int;
     bool called = false;
     a.finall(() {
         return 2;
@@ -680,7 +692,7 @@ unittest { //Finally returning a value
     assert(called);
 }
 unittest { //Fail right away
-    auto a = new PromiseIterator!int;
+    auto a = new DelegatePromiseIterator!int;
     auto err = new Exception("yada");
     bool called = false;
     a.reject(err);
@@ -693,7 +705,7 @@ unittest { //Fail right away
     assert(called);
 }
 unittest { //EOF right away
-    auto a = new PromiseIterator!int;
+    auto a = new DelegatePromiseIterator!int;
     bool called = false;
     a.resolve();
     a.each((a) {
@@ -705,9 +717,9 @@ unittest { //EOF right away
     assert(called);
 }
 unittest { // Ones might re-resolve right away
-    auto a = new PromiseIterator!int;
+    auto a = new DelegatePromiseIterator!int;
     int calls = 0;
-    auto cont_delay = new Promise!bool;
+    auto cont_delay = new DelegatePromise!bool;
     
     a.resolve(0).then((cont) {
         a.resolve(1);
@@ -731,4 +743,24 @@ unittest { // Ones might re-resolve right away
     a.resolve();
     assert(calls == 2);
     cont_delay.resolve(true);
+}
+// next() might throw exception
+unittest {
+	auto err = new Exception("oi");
+	auto x = new class PromiseIterator!int {
+		override Promise!ItValue next(Promise!bool) {
+			throw err;
+		}
+	};
+
+	bool called = false;
+	x.each((_) {
+		assert(false);
+	}).then((_) {
+		assert(false);
+	}).except((Exception e) {
+		called = true;
+		assert(e is err);
+	}).nothrow_();
+	assert(called);
 }

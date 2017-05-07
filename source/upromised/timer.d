@@ -1,7 +1,7 @@
 module upromised.timer;
 import deimos.libuv.uv : uv_timer_t, uv_handle_t, uv_loop_t, uv_timer_init, uv_timer_start, uv_timer_stop, uv_close, uv_timer_get_repeat;
 import upromised.loop : Loop;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : DelegatePromise, DelegatePromiseIterator, Promise, PromiseIterator;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck;
 import std.datetime : Duration;
@@ -14,8 +14,8 @@ uv_handle_t* handle(ref uv_timer_t self) nothrow {
 class Timer {
 public:
     uv_timer_t self;
-    Promise!void closePromise;
-    PromiseIterator!int startPromise;
+    DelegatePromise!void closePromise;
+    DelegatePromiseIterator!int startPromise;
 
     this(Loop loop) {
         this(cast(uv_loop_t*)loop.inner());
@@ -28,7 +28,7 @@ public:
 
     Promise!void close() nothrow {
         if (closePromise !is null) return closePromise;
-        closePromise = new Promise!void;
+        closePromise = new DelegatePromise!void;
         uv_close(self.handle, (selfSelf) nothrow {
             auto self = getSelf!Timer(selfSelf);
             gcrelease(self);
@@ -37,11 +37,11 @@ public:
         return closePromise;
     }
 
-    PromiseIterator!int start(Duration start, Duration repeat = Duration.init) nothrow {
+    DelegatePromiseIterator!int start(Duration start, Duration repeat = Duration.init) nothrow {
         import std.algorithm : swap;
 
         assert(startPromise is null);
-        startPromise = new PromiseIterator!int;
+        startPromise = new DelegatePromiseIterator!int;
         auto r = startPromise;
         int err = uv_timer_start(&self, (selfSelf) nothrow {
             auto self = getSelf!Timer(selfSelf);
@@ -63,7 +63,7 @@ public:
 
     static Promise!void once(uv_loop_t* ctx, Duration start = Duration.init) nothrow {
         return Promise!void.resolved().then(() => new Timer(ctx)).then((timer) { 
-            return timer.start(start).each((a){}).finall(() => timer.close());
+            return timer.start(start).each((a){}).finall(() => timer.close()).then((){});
         });
     }
 }

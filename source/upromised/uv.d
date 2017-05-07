@@ -1,7 +1,7 @@
 module upromised.uv;
 import deimos.libuv.uv;
-import upromised.promise : Promise, PromiseIterator;
 import std.format : format;
+import upromised.promise : DelegatePromise, DelegatePromiseIterator;
 import upromised : fatal;
 
 class UvError : Exception {
@@ -20,7 +20,7 @@ void uvCheck(int r) {
 	if (r < 0) throw new UvError(r);
 }
 
-bool uvCheck(T)(int r, Promise!T t) nothrow {
+bool uvCheck(T)(int r, DelegatePromise!T t) nothrow {
     if (r < 0) {
         t.reject(new UvError(r));
         return true;
@@ -28,7 +28,7 @@ bool uvCheck(T)(int r, Promise!T t) nothrow {
     return false;
 }
 
-bool uvCheck(T)(int r, PromiseIterator!T t) nothrow {
+bool uvCheck(T)(int r, DelegatePromiseIterator!T t) nothrow {
     if (r < 0) {
         t.reject(new UvError(r));
         return true;

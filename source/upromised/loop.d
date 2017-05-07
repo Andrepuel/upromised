@@ -59,20 +59,28 @@ Loop defaultLoop() {
 		override PromiseIterator!Stream listenTcp(Address[] dns) nothrow {
 			import upromised.tcp : TcpSocket;
 
-			PromiseIterator!Stream r = new PromiseIterator!Stream;
-			Promise!void.resolved()
-				.then(() => new TcpSocket(loop))
-				.then((socket) {
-					return Promise!void.resolved().then(() => socket.bind(dns))
-						.then(() => socket.listen(128).each((conn) {
-							return r.resolve(conn);
-						}))
-						.finall(() => socket.close())
-						.except((Exception e) {
-							r.reject(e);
-						});
-				});
+			Promise!TcpSocket socket = Promise!void.resolved()
+			.then(() => new TcpSocket(loop))
+			.then((socket) {
+				socket.bind(dns);
+				return socket;
+			});
+			Promise!(PromiseIterator!TcpSocket) listen = socket.then((s) => s.listen(128));
 
+			auto r = new class PromiseIterator!Stream {
+				override Promise!ItValue next(Promise!bool done) {
+					done.then((cont) {
+						if (!cont) {
+							return socket.then((s) => s.close());
+						}
+						return Promise!void.resolved();
+					}).nothrow_();
+
+					return listen
+					.then((self) => self.next(done))
+					.then((eofConn) => ItValue(eofConn.eof, eofConn.value));
+				}
+			};
 			return r;
 		}
 
