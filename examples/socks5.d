@@ -99,17 +99,22 @@ int main(string[] args) {
 			}).then((socks5_server_connect connect) {
 				enforce(connect.ver == 5);
 				enforce(connect.status == 0);
-				if (connect.addr_type == 1) {
-					b.limit(4);
-				} else if (connect.addr_type == 4) {
-					b.limit(16);
-				} else {
-					enforce(false, "unexpect addr type");
-					assert(false);
-				}
-				return b.read().each((addr) {
+				return Promise!void.resolved()
+				.then(() {
+					if (connect.addr_type == 1) {
+						return Promise!ubyte.resolved(4);
+					} else if (connect.addr_type == 4) {
+						return Promise!ubyte.resolved(16);
+					} else if (connect.addr_type == 3) {
+						return b.readStruct!ubyte();
+					} else {
+						enforce(false, "unexpect addr type %s".format(connect));
+						assert(false);
+					}
+				}).then((len) => b.limit(len))
+				.then(() => b.read().each((addr) {
 					return false;
-				}).then((bool) {});
+				}));
 			}).then(() {
 				return b.readStruct!ushort;
 			}).then((port) {
