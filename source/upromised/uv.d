@@ -7,9 +7,9 @@ import upromised : fatal;
 class UvError : Exception {
 	import std.string : fromStringz;
 
-	this(int code) nothrow {
+	this(int code, string file = __FILE__, size_t line = __LINE__) nothrow {
 		try {
-			super("UV error (%s) %s".format(uv_strerror(code).fromStringz, code));
+			super("UV error (%s) %s".format(uv_strerror(code).fromStringz, code), file, line);
 		} catch(Exception e) {
 			fatal(e);
 		}

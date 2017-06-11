@@ -184,6 +184,17 @@ public:
         enforce(ctx !is null);
     }
 
+    this(string serverChainPath, string serverKeyPath) {
+        import std.string : toStringz;
+
+        ctx = SSL_CTX_new(SSLv23_server_method());
+        enforce(ctx !is null);
+        int rc = SSL_CTX_use_certificate_chain_file(ctx, serverChainPath.toStringz);
+        if (rc <= 0) throw new OpensslError(rc, 0);
+        rc = SSL_CTX_use_PrivateKey_file(ctx, serverKeyPath.toStringz, SSL_FILETYPE_PEM);
+        if (rc <= 0) throw new OpensslError(rc, 0);
+    }
+
     ~this() nothrow {
         SSL_CTX_free(ctx);
     }
@@ -233,20 +244,19 @@ private:
 
     Promise!int operate(alias a, Args...)(Args args) nothrow {
         Promise!int tryOne() {
-            int r;
-            Want want = tryOperate!a(args);
-
-            return Promise!void.resolved().then(() {
+            return Promise!void.resolved()
+            .then(() => tryOperate!a(args))
+            .then((want) {
                 auto toWrite = tlsWrite.read();
                 if (toWrite.length > 0) {
-                    return underlying.write(toWrite);
+                    return underlying.write(toWrite)
+                    .then(() {
+                        if (want < Want.Success) {
+                            return tryOne();
                 } else {
-                    return Promise!void.resolved();
+                            return Promise!int.resolved(want);
                 }
-            }).then(() {
-                if (want >= Want.Success) {
-                    r = want;
-                    return Promise!bool.resolved(false);
+                    });
                 }
 
                 if (want == Want.Read) {
@@ -256,19 +266,12 @@ private:
                     }).then((a) {
                         if (a) {
                             throw new UnderlyingShutdown;
-                        }
-                        return true;
+                }
+                    return tryOne();
                     });
                 }
-                assert(want == Want.Write);
-
-                return Promise!bool.resolved(true);
-            }).then((repeat) {
-                if (repeat) {
-                    return tryOne();
-                } else {
-                    return Promise!int.resolved(r);
-                }
+                assert(want >= Want.Success);
+                return Promise!int.resolved(want);
             });
         }
         return Promise!void.resolved().then(() => tryOne());
@@ -285,6 +288,10 @@ public:
         tlsRead = BioPair(0);
         SSL_set_bio(ssl, tlsRead.read_, tlsWrite.write_);
         readBuffer.length = 1024;
+    }
+
+    Promise!void accept() nothrow {
+        return operate!(SSL_accept).then((_) {});
     }
 
     Promise!void connect(string hostname = null) nothrow {
