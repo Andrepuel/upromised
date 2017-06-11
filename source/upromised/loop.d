@@ -1,5 +1,6 @@
 module upromised.loop;
 import std.socket : Address;
+import std.datetime : Duration;
 import upromised.stream : DatagramStream, Stream;
 import upromised.promise : Promise, PromiseIterator;
 
@@ -15,8 +16,13 @@ interface Loop {
 	Promise!TlsContext context(string certificatesPath = null) nothrow;
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
 	Promise!DatagramStream udp(Address addr = null) nothrow;
+	PromiseIterator!int interval(Duration) nothrow;
 	void* inner() nothrow;
 	int run();
+	
+	final Promise!void sleep(Duration a) nothrow {
+		return interval(a).each((_) => false).then((){});
+	}
 }
 
 Loop defaultLoop() {
@@ -174,6 +180,26 @@ Loop defaultLoop() {
 				})
 				.then(() => cast(DatagramStream)udp);
 			});
+		}
+
+		override PromiseIterator!int interval(Duration a) nothrow {
+			import upromised.timer : Timer;
+			auto timer = Promise!void.resolved()
+			.then(() => new Timer(loop));
+			auto timerIterator = timer.then((timer) => timer.start(a, a));
+
+			return new class PromiseIterator!int {
+				override Promise!ItValue next(Promise!bool done) {
+					done.then((cont) {
+						if (!cont) {
+							return timer.then((timer) => timer.close());
+						}
+						return Promise!void.resolved();
+					});
+
+					return timerIterator.then((iterator) => iterator.next(done));
+				}
+			};
 		}
 	};
 }
