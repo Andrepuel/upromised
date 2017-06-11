@@ -268,9 +268,10 @@ private:
                         }
                         return tryOne();
                     });
-                } else {
-                    assert(want >= Want.Success);
+                } else if (want >= Want.Success) {
                     return Promise!int.resolved(want);
+                } else {
+                    return tryOne();
                 }
             });
         }
