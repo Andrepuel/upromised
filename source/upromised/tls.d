@@ -351,7 +351,7 @@ public:
         return new class PromiseIterator!(const(ubyte)[]) {
             override Promise!ItValue next(Promise!bool) {
                 return readOne()
-                .then((chunk) => chunk ? ItValue(false, chunk) : ItValue(true));
+                .then((chunk) => chunk.length > 0 ? ItValue(false, chunk) : ItValue(true));
             }
         };
     }
