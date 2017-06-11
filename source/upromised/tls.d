@@ -247,18 +247,17 @@ private:
             return Promise!void.resolved()
             .then(() => tryOperate!a(args))
             .then((want) {
-                auto toWrite = tlsWrite.read();
-                if (toWrite.length > 0) {
-                    return underlying.write(toWrite)
-                    .then(() {
-                        if (want < Want.Success) {
-                            return tryOne();
-                } else {
-                            return Promise!int.resolved(want);
+                Promise!Want writes() {
+                    auto toWrite = tlsWrite.read();
+                    if (toWrite.length > 0) {
+                        return underlying.write(toWrite)
+                        .then(() => writes());
+                    } else {
+                        return Promise!Want.resolved(want);
+                    }
                 }
-                    });
-                }
-
+                return writes();
+            }).then((want) {
                 if (want == Want.Read) {
                     return underlying.read().each((data) {
                         tlsRead.write(data);
@@ -266,12 +265,13 @@ private:
                     }).then((a) {
                         if (a) {
                             throw new UnderlyingShutdown;
-                }
-                    return tryOne();
+                        }
+                        return tryOne();
                     });
+                } else {
+                    assert(want >= Want.Success);
+                    return Promise!int.resolved(want);
                 }
-                assert(want >= Want.Success);
-                return Promise!int.resolved(want);
             });
         }
         return Promise!void.resolved().then(() => tryOne());
