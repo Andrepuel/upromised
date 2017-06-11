@@ -187,6 +187,22 @@ interface Promise(T_) : Promise_ {
 		return r;
 	}
 
+	Promise!T failure(U)(U delegate(Exception) cb, string file = __FILE__, size_t line = __LINE__) nothrow
+	if (is(Promisify!U.T == void))
+	{
+		auto r = new DelegatePromise!T(this, file, line);
+		then_((value) nothrow {
+			if (value.e !is null) {
+				promisifyCall(cb, value.e).then_((value2) nothrow {
+					r.resolve(value);
+				});
+			} else {
+				r.resolve(value);
+			}
+		});
+		return r;
+	}
+
 	static if (is(T == void)) {
 		static Promise!T resolved(string file = __FILE__, size_t line = __LINE__) nothrow {
 			return resolved_(Value(null), file, line);
@@ -396,7 +412,53 @@ unittest {
 	}).nothrow_();
 	assert(called);
 }
-
+// Failure method is not called on success
+unittest {
+	bool called;
+	Promise!int.resolved(3)
+	.failure((Exception _) {
+		assert(false);
+	}).then((a) {
+		assert(a == 3);
+		called = true;
+	}).nothrow_();
+	assert(called);
+}
+// Failure method is called on error
+unittest {
+	bool called;
+	bool called2;
+	auto err = new Exception("err");
+	Promise!int.rejected(err)
+	.failure((Exception e) {
+		assert(e is err);
+		called = true;
+	}).except((Exception e) {
+		assert(e is err);
+		called2 = true;
+	}).nothrow_();
+	assert(called);
+	assert(called2);
+}
+// Failure might be delayed
+unittest {
+	DelegatePromise!void delay;
+	bool called2;
+	auto err = new Exception("err");
+	Promise!int.rejected(err)
+	.failure((Exception e) {
+		assert(e is err);
+		delay = new DelegatePromise!void;
+		return delay;
+	}).except((Exception e) {
+		assert(e is err);
+		called2 = true;
+	}).nothrow_();
+	assert(delay !is null);
+	assert(!called2);
+	delay.resolve();
+	assert(called2);
+}
 interface PromiseIterator(T) {
 	struct ItValue {
 		bool eof;
