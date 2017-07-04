@@ -3,3 +3,4 @@
 /tls
 /http
 /ice
+/proxy_command
