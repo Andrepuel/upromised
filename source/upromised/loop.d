@@ -128,9 +128,7 @@ Loop defaultLoop() {
 			} else version(hasSecurity) {
 				return Promise!TlsContext.resolved(TlsContext.init);
 			} else {
-				auto r = new Promise!TlsContext;
-				r.reject(new Exception("TLS not supported"));
-				return r;
+				return Promise!TlsContext.rejected(new Exception("TLS not supported"));
 			}
 		}
 
@@ -156,9 +154,7 @@ Loop defaultLoop() {
 							.then!Stream(() => r);
 					});
 			} else {
-				auto r = new Promise!Stream;
-				r.reject(new Exception("TLS not supported"));
-				return r;
+				return Promise!Stream.rejected(new Exception("TLS not supported"));
 			}
 		}
 

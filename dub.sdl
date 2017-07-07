@@ -16,3 +16,6 @@ configuration "with_openssl" {
 	dependency "openssl" version="~>1.1.4+1.0.1g"
 	lflags "-L/usr/local/opt/openssl/lib"
 }
+configuration "without_tls" {
+	platforms "osx" "windows" "linux"
+}
