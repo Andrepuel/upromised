@@ -3,8 +3,9 @@ import core.stdc.signal : SIGINT;
 import deimos.libuv.uv : uv_loop_t, uv_process_t;
 import upromised.loop : Loop;
 import upromised.memory : gcrelease, gcretain, getSelf;
+import upromised.stream : Stream;
 import upromised.pipe : Pipe;
-import upromised.promise : DelegatePromise, Promise;
+import upromised.promise : DelegatePromise, Promise, PromiseIterator;
 import upromised.uv : handle, stream, uvCheck;
 
 shared static this() {
@@ -87,5 +88,40 @@ public:
 		import deimos.libuv.uv : uv_process_kill;
 		
 		uv_process_kill(&self, signal).uvCheck();
+	}
+
+	static Stream stream(Loop loop, string[] args, Pipe stderr = Process.STDERR) {
+		return new class Stream {
+			Pipe stdin;
+			Pipe stdout;
+			Process process;
+
+			this() {
+				stdin = new Pipe(loop);
+				stdout = new Pipe(loop);
+				process = new Process(loop, args, stdin, stdout, stderr);
+			}
+
+			Promise!void shutdown() nothrow {
+				return stdin.shutdown();
+			}
+
+			Promise!void close() nothrow {
+				return Promise!void.resolved().
+				then(() => process.kill())
+				.finall(() => stdin.close())
+				.then(() => process.wait())
+				.finall(() => stdout.close())
+				.then((_) {});
+			}
+
+			PromiseIterator!(const(ubyte)[]) read() nothrow {
+				return stdout.read();
+			}
+
+			Promise!void write(immutable(ubyte)[] data) nothrow {
+				return stdin.write(data);
+			}
+		};
 	}
 }
