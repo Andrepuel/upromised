@@ -3,28 +3,16 @@ module upromised.promise;
 import std.format : format;
 
 interface Promise_ {
-	struct DebugInfo {
-		string file;
-		size_t line;
-		Promise_ parent;
-
-		// Remarks: Printing a Promise per line ensures that
-		// something will get printed even in case of memory corruption
-		void printAll() nothrow {
-			import std.stdio : stderr;
-
-			try { stderr.writeln(file, ":", line); } catch(Exception){}
-			if (parent !is null) parent.info.printAll();
-		}
-	}
-
-	DebugInfo info() nothrow;
-
 	final protected void fatal() nothrow {
+		import std.algorithm : each;
 		import std.stdio : stderr;
-		
-		try { stderr.writeln("Fatal error"); } catch(Exception){}
-		info.printAll();
+		import upromised.backtrace : backtrace;
+
+		try {
+			stderr.writeln("Fatal error");
+			backtrace.each!(x => stderr.writeln);
+		} catch(Exception) {
+		}
 	}
 }
 
@@ -111,27 +99,27 @@ interface Promise(T_) : Promise_ {
 	}
 	
 	static if (is(T == void)) {
-		Promisify!U then(U)(U delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-			return then2!U(cb, file, line);
+		Promisify!U then(U)(U delegate() cb) nothrow {
+			return then2!U(cb);
 		}
 	} else {
-		Promisify!U then(U)(U delegate(T) cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-			return then2!U(cb, file, line);
+		Promisify!U then(U)(U delegate(T) cb) nothrow {
+			return then2!U(cb);
 		}
 
-		Promisify!U then(U)(U delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-			return then2!U((_) => cb(), file, line);
+		Promisify!U then(U)(U delegate() cb) nothrow {
+			return then2!U((_) => cb());
 		}
 	}
 
-	protected Promisify!U then2(U)(Then!U cb, string file = __FILE__, size_t line = __LINE__) nothrow {
-		auto r = new DelegatePromise!(Promisify!U.T)(this, file, line);
-		then_((value) nothrow {
+	protected Promisify!U then2(U)(Then!U cb) nothrow {
+		auto r = new DelegatePromise!(Promisify!U.T);
+		thenWithTrace((value) nothrow {
 			if (value.e !is null) {
 				r.reject(value.e);
 			} else {
 				scope(failure) r.fatal();
-				promisifyCall(cb, value.value.expand).then_((v) nothrow {
+				promisifyCall(cb, value.value.expand).thenWithTrace((v) nothrow {
 					r.resolve(v);
 				});
 			}
@@ -139,16 +127,16 @@ interface Promise(T_) : Promise_ {
 		return r;
 	}
 
-	Promise!void except(E,U)(U delegate(E e) cb, string file = __FILE__, size_t line = __LINE__) nothrow
+	Promise!void except(E,U)(U delegate(E e) cb) nothrow
 	if (is(Promisify!U.T == void) && is (E : Exception))
 	{
-		auto r = new DelegatePromise!void(this, file, line);
-		then_((value) nothrow {
+		auto r = new DelegatePromise!void;
+		thenWithTrace((value) nothrow {
 			scope(failure) r.fatal();
 			if (value.e !is null) {
 				E e = cast(E)value.e;
 				if (e !is null) {
-					promisifyCall(cb, e).then_((value) nothrow {
+					promisifyCall(cb, e).thenWithTrace((value) nothrow {
 						r.resolve(value);
 					});
 				} else {
@@ -161,16 +149,16 @@ interface Promise(T_) : Promise_ {
 		return r;
 	}
 
-	auto finall(U2)(U2 delegate() cb, string file = __FILE__, size_t line = __LINE__) nothrow {
+	auto finall(U2)(U2 delegate() cb) nothrow {
 		static if (is(Promisify!U2.T == void)) {
 			alias U = T;
 		} else {
 			alias U = U2;
 		}
-		auto r = new DelegatePromise!(Promisify!U.T)(this, file, line);
-		then_((value) nothrow {
+		auto r = new DelegatePromise!(Promisify!U.T);
+		thenWithTrace((value) nothrow {
 			scope(failure) r.fatal();
-			promisifyCall(cb).then_((value2) nothrow {
+			promisifyCall(cb).thenWithTrace((value2) nothrow {
 				Promisify!U.Value value3;
 				value3.e = value2.e is null ? value.e : value2.e;
 				static if (is(Promisify!U2.T == void)) {
@@ -187,13 +175,13 @@ interface Promise(T_) : Promise_ {
 		return r;
 	}
 
-	Promise!T failure(U)(U delegate(Exception) cb, string file = __FILE__, size_t line = __LINE__) nothrow
+	Promise!T failure(U)(U delegate(Exception) cb) nothrow
 	if (is(Promisify!U.T == void))
 	{
-		auto r = new DelegatePromise!T(this, file, line);
-		then_((value) nothrow {
+		auto r = new DelegatePromise!T;
+		thenWithTrace((value) nothrow {
 			if (value.e !is null) {
-				promisifyCall(cb, value.e).then_((value2) nothrow {
+				promisifyCall(cb, value.e).thenWithTrace((value2) nothrow {
 					r.resolve(value);
 				});
 			} else {
@@ -204,59 +192,60 @@ interface Promise(T_) : Promise_ {
 	}
 
 	static if (is(T == void)) {
-		static Promise!T resolved(string file = __FILE__, size_t line = __LINE__) nothrow {
-			return resolved_(Value(null), file, line);
+		static Promise!T resolved() nothrow {
+			return resolved_(Value(null));
 		}
 	} else {
-		static Promise!T resolved(T t, string file = __FILE__, size_t line = __LINE__) nothrow {
-			return resolved_(Value(null, t), file, line);
+		static Promise!T resolved(T t) nothrow {
+			return resolved_(Value(null, t));
 		}
 	}
-	protected static Promise!T resolved_(Value value, string file = __FILE__, size_t line = __LINE__) {
+	protected static Promise!T resolved_(Value value) {
 		return new class Promise!T {
 			override void then_(void delegate(Value) nothrow cb) nothrow {
 				cb(value);
 			}
-
-			override DebugInfo info() nothrow {
-				return DebugInfo(file, line);
-			}
 		};
 	}
 
-	static Promise!T rejected(Exception e, string file = __FILE__, size_t line = __LINE__) nothrow {
+	static Promise!T rejected(Exception e) nothrow {
+		import core.runtime : Runtime;
+		if (e.info is null) {
+			try {
+				e.info = Runtime.traceHandler()(null);
+			} catch(Exception) {
+			}
+		}
+
 		return new class Promise!T {
 			override void then_(void delegate(Value) nothrow cb) nothrow {
 				cb(Value(e));
 			}
-
-			override DebugInfo info() nothrow {
-				return DebugInfo(file, line);
-			}
 		};
 	}
 
-	final Promise!void nothrow_(string file = __FILE__, size_t line = __LINE__) nothrow {
-		return except((Exception e) => .fatal(e, file, line), file, line);
+	final Promise!void nothrow_() nothrow {
+		return except((Exception e) => .fatal(e));
 	}
 
 	protected void then_(void delegate(Value) nothrow cb) nothrow;
+
+	final protected void thenWithTrace(void delegate(Value) nothrow cb) nothrow {
+		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
+
+		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
+		then_((value) nothrow {
+			auto prev = setBasestack(backBt);
+			scope(exit) recoverBasestack(prev);
+			cb(value);
+		});
+	}
 }
 
 class DelegatePromise(T) : Promise!T {
-	DebugInfo info_;
-
 	bool resolved;
 	Value result;
 	void delegate(Value) nothrow[] pending;
-
-	this(Promise_ parent = null, string file = __FILE__, size_t line = __LINE__) nothrow {
-		info_ = DebugInfo(file, line, parent);
-	}
-
-	override DebugInfo info() nothrow {
-		return info_;
-	}
 
 	override void then_(void delegate(Value) nothrow cb) nothrow {
 		if (resolved) {
@@ -267,10 +256,7 @@ class DelegatePromise(T) : Promise!T {
 	}
 
 	void resolve(Value value) nothrow {
-        if (resolved) {
-            info.printAll();
-        }
-
+		scope(failure) fatal();
 		assert(!resolved);
 		result = value;
 		resolved = true;
@@ -469,6 +455,9 @@ interface PromiseIterator(T) {
 	final Promise!bool each(U)(U delegate(T) cb) nothrow
 	if (is(Promisify!U.T == void) || is(Promisify!U.T == bool))
 	{
+		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
+
+		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
 		Promise!bool repeat() nothrow {
 			static if (is(Promisify!U.T == void)) {
 				bool delegate() boolify = () => true;
@@ -482,6 +471,8 @@ interface PromiseIterator(T) {
 					done.resolve(false);
 					return Promise!bool.resolved(true);
 				} else {
+					auto prev = setBasestack(backBt);
+					scope(exit) recoverBasestack(prev);
 					return promisifyCall(cb, a.value).then(boolify).then((cont) {
 						done.resolve(cont);
 						if (cont) {
@@ -508,7 +499,7 @@ class DelegatePromiseIterator(T) : PromiseIterator!T {
 		if (buffer.length > 0) {
 			auto next = buffer[0];
 			buffer = buffer[1..$];
-			done.then_(a => next[1].resolve(a));
+			done.thenWithTrace(a => next[1].resolve(a));
 			return next[0];
 		} else {
 			assert(pending[0] is null);
