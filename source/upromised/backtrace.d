@@ -67,6 +67,10 @@ Throwable.TraceInfo concat(Throwable.TraceInfo a, Throwable.TraceInfo b) nothrow
 	});
 }
 ulong length(Throwable.TraceInfo info) {
+	import core.stdc.stdlib : abort;
+
+	if (info is null) abort();
+
 	size_t total;
 	foreach(_; info) {
 		total++;
@@ -78,6 +82,10 @@ Throwable.TraceInfo trimTrail(Throwable.TraceInfo info, ulong amount) nothrow {
 	return trimTrailDg(info, () => amount);
 }
 Throwable.TraceInfo trimTrailDg(Throwable.TraceInfo info, ulong delegate() amountDg) nothrow {
+	import core.stdc.stdlib : abort;
+	if (info is null) abort();
+	if (amountDg.funcptr is null) abort();
+
 	return dgTraceInfo((cb) {
 		size_t total = info.length;
 		size_t amount = amountDg();
@@ -91,7 +99,10 @@ Throwable.TraceInfo trimTrailDg(Throwable.TraceInfo info, ulong delegate() amoun
 	});
 }
 Throwable.TraceInfo skipMagic(Throwable.TraceInfo a, string magic) nothrow {
+	import core.stdc.stdlib : abort;
 	import std.algorithm : countUntil;
+
+	if (a is null) abort();
 
 	magic = magic[1..$];
 	return dgTraceInfo((cb) {
@@ -108,6 +119,12 @@ Throwable.TraceInfo skipMagic(Throwable.TraceInfo a, string magic) nothrow {
 				return r;
 			}
 		});
+		if (skipping) {
+			a.opApply((ref const(char[]) v) {
+				cb(v, &r);
+				return r;
+			});
+		}
 	});
 }
 
@@ -123,6 +140,7 @@ static this() {
 	import core.runtime : defaultTraceHandler;
 
 	handler.base.base = [].traceinfo;
+	handler.base.skip = () => 0;
 	handler.original = &defaultTraceHandler;
 	Runtime.traceHandler(&handlerFunc);
 }
@@ -157,7 +175,11 @@ BaseStack setBasestack(Throwable.TraceInfo backBt) nothrow {
 	handler.base.base = backBt;
 	auto skip = realBacktrace(null);
 	try {
-		handler.base.skip = () => skip.length - 1;
+		handler.base.skip = () {
+			auto l = skip.length;
+			if (l == 0) return 0;
+			return skip.length - 1;
+		};
 	} catch(Exception) {
 		assert(false);
 	}
