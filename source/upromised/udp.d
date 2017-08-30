@@ -77,13 +77,13 @@ public:
 				uv_udp_recv_start(&self, &readAlloc, (selfArg, nread, buf, addr, flags) nothrow {
 					auto self = selfArg.getSelf!UdpSocket;
 
+					if (buf.base !is null) gcrelease(buf.base);
+
 					if (nread == 0 && addr is null) {
 						return;
 					}
 
 					uv_udp_recv_stop(&self.self);
-
-					if (buf.base !is null) gcrelease(buf.base);
 
 					if (self.readPromise is null) {
 						return;
