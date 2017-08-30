@@ -458,34 +458,31 @@ interface PromiseIterator(T) {
 		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
 
 		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
-		Promise!bool repeat() nothrow {
-			static if (is(Promisify!U.T == void)) {
-				bool delegate() boolify = () => true;
-			} else {
-				bool delegate(bool) boolify = (bool a) => a;
-			}
+		
+		static if (is(Promisify!U.T == void)) {
+			bool delegate() boolify = () => true;
+		} else {
+			bool delegate(bool) boolify = (bool a) => a;
+		}
 
+		bool eof;
+		return do_while(() {
 			auto done = new DelegatePromise!bool;
 			return promisifyCall(&next, done).then((a) {
 				if (a.eof) {
 					done.resolve(false);
-					return Promise!bool.resolved(true);
+					eof = true;
+					return Promise!bool.resolved(false);
 				} else {
 					auto prev = setBasestack(backBt);
 					scope(exit) recoverBasestack(prev);
 					return promisifyCall(cb, a.value).then(boolify).then((cont) {
 						done.resolve(cont);
-						if (cont) {
-							return repeat();
-						} else {
-							return Promise!bool.resolved(false);
-						}
+						return cont;
 					});
 				}
 			});
-		}
-
-		return repeat();
+		}).then(() => eof);
 	}
 }
 class DelegatePromiseIterator(T) : PromiseIterator!T {
