@@ -817,14 +817,13 @@ unittest {
 	}).nothrow_();
 	assert(called);
 }
-Promise!void do_while(U)(U delegate() cb, DelegatePromise!void r = null) nothrow
-if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
-{
-	if (r is null) {
-		r = new DelegatePromise!void;
-	}
+private void do_while(U)(U delegate() cb, DelegatePromise!void r, Throwable.TraceInfo backBt) nothrow {
+	import upromised.backtrace : setBasestack, recoverBasestack;
 
-	promisifyCall(cb).thenWithTrace((v) nothrow {
+	promisifyCall(cb).then_((v) nothrow {
+		auto prev = setBasestack(backBt);
+		scope(exit) recoverBasestack(prev);
+
 		if (v.e) {
 			r.resolve(Promise!void.Value(v.e));
 			return;
@@ -838,12 +837,20 @@ if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
 		}
 
 		if (cont) {
-			do_while(cb, r);
+			do_while(cb, r, backBt);
 		} else {
 			r.resolve();
 		}
 	});
+}
+Promise!void do_while(U)(U delegate() cb) nothrow
+if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
+{
+	import upromised.backtrace : backtrace, traceinfo, concat;
 
+	auto r = new DelegatePromise!void;
+	Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
+	do_while(cb, r, backBt);
 	return r;
 }
 // do_while until return 0
