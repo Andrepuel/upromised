@@ -817,3 +817,88 @@ unittest {
 	}).nothrow_();
 	assert(called);
 }
+Promise!void do_while(U)(U delegate() cb, DelegatePromise!void r = null) nothrow
+if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
+{
+	if (r is null) {
+		r = new DelegatePromise!void;
+	}
+
+	promisifyCall(cb).thenWithTrace((v) nothrow {
+		if (v.e) {
+			r.resolve(Promise!void.Value(v.e));
+			return;
+		}
+
+		bool cont;
+		static if(is(Promisify!U.T == void)) {
+			cont = true;
+		} else {
+			cont = v.value[0];
+		}
+
+		if (cont) {
+			do_while(cb, r);
+		} else {
+			r.resolve();
+		}
+	});
+
+	return r;
+}
+// do_while until return 0
+unittest {
+	int count = 3;
+	do_while(() {
+		count--;
+		return count > 0;
+	}).nothrow_();
+
+	assert(count == 0);
+}
+// do_while might be delayed
+unittest {
+	int called = 0;
+	DelegatePromise!bool next;
+	do_while(() {
+		++called;
+		next = new DelegatePromise!bool;
+		return next;
+	}).then(() {
+		assert(called == 2);
+		called++;
+	}).nothrow_();
+	assert(called == 1);
+	next.resolve(true);
+	assert(called == 2);
+	next.resolve(false);
+	assert(called == 3);
+}
+// do_while catches all exceptions
+unittest {
+	auto err = new Exception("");
+	bool called;
+	do_while(() {
+		throw err;
+		return true;
+	}).except((Exception e) {
+		assert(e is err);
+		called = true;
+	}).nothrow_();
+	assert(called);
+}
+// do_while with void loops indefinitely
+unittest {
+	int called;
+	DelegatePromise!void next;
+	do_while(() {
+		called++;
+		next  = new DelegatePromise!void;
+		return next;
+	}).nothrow_();
+	assert(called == 1);
+	next.resolve();
+	assert(called == 2);
+	next.resolve();
+	assert(called == 3);
+}
