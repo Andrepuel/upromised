@@ -10,7 +10,7 @@ interface Promise_ {
 
 		try {
 			stderr.writeln("Fatal error");
-			backtrace.each!(x => stderr.writeln);
+			backtrace.each!(x => stderr.writeln(x));
 		} catch(Exception) {
 		}
 	}
