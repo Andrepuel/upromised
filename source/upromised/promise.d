@@ -450,7 +450,7 @@ interface PromiseIterator(T) {
 		bool eof;
 		T value;
 	}
-	Promise!ItValue next(Promise!bool done);
+	Promise!ItValue next(Promise!bool done = break_);
 
 	final Promise!bool each(U)(U delegate(T) cb) nothrow
 	if (is(Promisify!U.T == void) || is(Promisify!U.T == bool))
@@ -472,7 +472,7 @@ interface PromiseIterator(T) {
 				if (a.eof) {
 					done.resolve(false);
 					eof = true;
-					return Promise!bool.resolved(false);
+					return break_;
 				} else {
 					auto prev = setBasestack(backBt);
 					scope(exit) recoverBasestack(prev);
@@ -849,6 +849,12 @@ if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
 	Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
 	do_while(cb, r, backBt);
 	return r;
+}
+static Promise!bool break_;
+static Promise!bool continue_;
+static this() {
+	break_ = Promise!bool.resolved(false);
+	continue_ = Promise!bool.resolved(true);
 }
 // do_while until return 0
 unittest {
