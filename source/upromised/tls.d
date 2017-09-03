@@ -136,6 +136,13 @@ struct BioPair {
         writeSome(data);
     }
 
+    bool flushPending() {
+        if (pending.length == 0) return false;
+
+        writeSome(pending);
+        return true;
+    }
+
     private void writeSome(ref inout(ubyte)[] data) {
         int r = BIO_write(write_, data.ptr, cast(int)data.length);
         if (r < 0) throw new OpensslError(r, 0);
@@ -243,41 +250,41 @@ private:
     }
 
     Promise!int operate(alias a, Args...)(Args args) nothrow {
-        Promise!int tryOne() {
-            return Promise!void.resolved()
-            .then(() => tryOperate!a(args))
-            .then((want) {
-                Promise!Want writes() {
-                    auto toWrite = tlsWrite.read();
-                    if (toWrite.length > 0) {
-                        return underlying.write(toWrite)
-                        .then(() => writes());
-                    } else {
-                        return Promise!Want.resolved(want);
-                    }
-                }
-                return writes();
-            }).then((want) {
-                if (want == Want.Read) {
-                    return underlying.read().each((data) {
-                        tlsRead.write(data);
-                        return false;
-                    }).then((a) {
-                        if (a) {
-                            throw new UnderlyingShutdown;
-                        }
-                        return tryOne();
-                    });
-                } else if (want >= Want.Success) {
-                    return Promise!int.resolved(want);
+        import upromised.promise : break_, continue_, do_while;
+        
+        int r;
+        return do_while(() {
+            auto want = tryOperate!a(args);
+            return do_while(() {
+                auto toWrite = tlsWrite.read();
+                if (toWrite.length > 0) {
+                    return underlying.write(toWrite)
+                    .then(() => continue_);
                 } else {
-                    return tryOne();
+                    return break_;
+                }
+            }).then(() {
+                if (want == Want.Read) {
+                    if (tlsRead.flushPending()) {
+                        return continue_;
+                    } else {
+                        return underlying.read().next().then((data) {
+                            if (data.eof) {
+                                throw new UnderlyingShutdown;
+                            }
+                            tlsRead.write(data.value);
+                            return continue_;
+                        });
+                    }
+                } else if (want >= Want.Success) {
+                    r = want;
+                    return break_;
+                } else {
+                    return continue_;
                 }
             });
-        }
-        return Promise!void.resolved().then(() => tryOne());
+        }).then(() => r);
     }
-
     
 public:
     this(Stream stream, TlsContext ctx) {
