@@ -230,7 +230,7 @@ interface Promise(T_) : Promise_ {
 
 	protected void then_(void delegate(Value) nothrow cb) nothrow;
 
-	final protected void thenWithTrace(void delegate(Value) nothrow cb) nothrow {
+	final public void thenWithTrace(void delegate(Value) nothrow cb) nothrow {
 		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
 
 		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
@@ -890,7 +890,6 @@ unittest {
 	bool called;
 	do_while(() {
 		throw err;
-		return true;
 	}).except((Exception e) {
 		assert(e is err);
 		called = true;
