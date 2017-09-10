@@ -4,6 +4,8 @@ authors "Andre Puel"
 copyright "Copyright © 2016, Andre Puel"
 license "proprietary"
 dependency "libuv" version="~>1.9.1"
+lflags "$PACKAGE_DIR/libutp/libutp.a"
+libs "c++"
 
 configuration "with_security" {
 	platforms "osx"
