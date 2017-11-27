@@ -1,7 +1,7 @@
 #!/usr/bin/env dub
 /+ dub.json:
 {
-	"name": "holepunch",
+	"name": "proxy_command",
 	"dependencies": {
 		"upromised": {
 			"version": "*",

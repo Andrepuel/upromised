@@ -47,7 +47,9 @@ public:
 			self.getSelf!Process.wait_.resolve(exit_status);
 		};
 
-		uv_stdio_container_t[3] io;
+		import core.stdc.stdlib : malloc, free;
+		uv_stdio_container_t[] io = (cast(uv_stdio_container_t*)malloc(uv_stdio_container_t.sizeof*3))[0..3];
+		scope(exit) free(io.ptr);
 		foreach(i, pipe; [stdin, stdout, stderr]) {
 			if (pipe is STDIN || pipe is STDOUT || pipe is STDERR) {
 				io[i].flags = uv_stdio_flags.UV_INHERIT_FD;
