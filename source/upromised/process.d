@@ -1,6 +1,7 @@
 module upromised.process;
 import core.stdc.signal : SIGINT;
 import deimos.libuv.uv : uv_loop_t, uv_process_t;
+import std.stdio : File;
 import upromised.loop : Loop;
 import upromised.memory : gcrelease, gcretain, getSelf;
 import upromised.stream : Stream;
@@ -14,6 +15,15 @@ shared static this() {
 	signal(SIGPIPE, SIG_IGN);
 }
 
+class StdPipe {
+public:
+	File file;
+
+	this(File file) {
+		this.file = file;
+	}
+}
+
 class Process {
 private:
 	DelegatePromise!long wait_;
@@ -24,9 +34,9 @@ public:
 	__gshared Pipe STDERR;
 	shared static this() {
 		import std.stdio : stderr, stdin, stdout;
-		STDIN = cast(Pipe)cast(void*)&stdin;
-		STDOUT = cast(Pipe)cast(void*)&stdout;
-		STDERR = cast(Pipe)cast(void*)&stderr;
+		STDIN = cast(Pipe)cast(void*)(new StdPipe(stdin));
+		STDOUT = cast(Pipe)cast(void*)(new StdPipe(stdout));
+		STDERR = cast(Pipe)cast(void*)(new StdPipe(stderr));
 	}
 
 	uv_process_t self;
@@ -51,9 +61,10 @@ public:
 		uv_stdio_container_t[] io = (cast(uv_stdio_container_t*)malloc(uv_stdio_container_t.sizeof*3))[0..3];
 		scope(exit) free(io.ptr);
 		foreach(i, pipe; [stdin, stdout, stderr]) {
-			if (pipe is STDIN || pipe is STDOUT || pipe is STDERR) {
+			StdPipe stdpipe = cast(StdPipe)cast(Object)cast(void*)pipe;
+			if (stdpipe !is null) {
 				io[i].flags = uv_stdio_flags.UV_INHERIT_FD;
-				io[i].data.fd = (cast(File*)cast(void*)pipe).fileno;
+				io[i].data.fd = stdpipe.file.fileno;
 			} else if (pipe !is null) {
 				io[i].flags = uv_stdio_flags.UV_CREATE_PIPE;
 				if (i == 0) {

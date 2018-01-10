@@ -1,3 +1,16 @@
+#!/usr/bin/env dub
+/+ dub.json:
+{
+	"name": "socks5_server",
+	"dependencies": {
+		"upromised": {
+			"version": "*",
+			"path": "../"
+		}
+	}
+}
++/
+
 import std.exception : enforce;
 import std.format : format;
 import upromised.loop : defaultLoop, Loop;
