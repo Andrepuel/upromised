@@ -35,7 +35,7 @@ public:
 		}
 
 		running = true;
-		promisifyCall(task).thenWithTrace((v) => resolve(v));
+		promisifyCall(task).then_((v) => resolve(v));
 	}
 }
 
@@ -54,7 +54,7 @@ T await(T)(Promise!T a) {
 	bool already;
 	Promise!T.Value r;
 
-	a.thenWithTrace((rArg) nothrow {
+	a.then_((rArg) nothrow {
 		r = rArg;
 		try {
 			if (Fiber.getThis() is self) {

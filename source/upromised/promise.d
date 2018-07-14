@@ -6,12 +6,10 @@ interface Promise_ {
 	final protected void fatal() nothrow {
 		import std.algorithm : each;
 		import std.stdio : stderr;
-		import upromised.backtrace : backtrace;
 
 		try {
-			stderr.writeln("Fatal error");
-			backtrace.each!(x => stderr.writeln(x));
-		} catch(Exception) {
+			stderr.writeln("Fatal error on library");
+		} catch(Exception e) {
 		}
 	}
 }
@@ -114,12 +112,12 @@ interface Promise(T_) : Promise_ {
 
 	protected Promisify!U then2(U)(Then!U cb) nothrow {
 		auto r = new DelegatePromise!(Promisify!U.T);
-		thenWithTrace((value) nothrow {
+		then_((value) nothrow {
 			if (value.e !is null) {
 				r.reject(value.e);
 			} else {
 				scope(failure) r.fatal();
-				promisifyCall(cb, value.value.expand).thenWithTrace((v) nothrow {
+				promisifyCall(cb, value.value.expand).then_((v) nothrow {
 					r.resolve(v);
 				});
 			}
@@ -131,12 +129,12 @@ interface Promise(T_) : Promise_ {
 	if (is(Promisify!U.T == void) && is (E : Exception))
 	{
 		auto r = new DelegatePromise!void;
-		thenWithTrace((value) nothrow {
+		then_((value) nothrow {
 			scope(failure) r.fatal();
 			if (value.e !is null) {
 				E e = cast(E)value.e;
 				if (e !is null) {
-					promisifyCall(cb, e).thenWithTrace((value) nothrow {
+					promisifyCall(cb, e).then_((value) nothrow {
 						r.resolve(value);
 					});
 				} else {
@@ -156,9 +154,9 @@ interface Promise(T_) : Promise_ {
 			alias U = U2;
 		}
 		auto r = new DelegatePromise!(Promisify!U.T);
-		thenWithTrace((value) nothrow {
+		then_((value) nothrow {
 			scope(failure) r.fatal();
-			promisifyCall(cb).thenWithTrace((value2) nothrow {
+			promisifyCall(cb).then_((value2) nothrow {
 				Promisify!U.Value value3;
 				value3.e = value2.e is null ? value.e : value2.e;
 				static if (is(Promisify!U2.T == void)) {
@@ -179,9 +177,9 @@ interface Promise(T_) : Promise_ {
 	if (is(Promisify!U.T == void))
 	{
 		auto r = new DelegatePromise!T;
-		thenWithTrace((value) nothrow {
+		then_((value) nothrow {
 			if (value.e !is null) {
-				promisifyCall(cb, value.e).thenWithTrace((value2) nothrow {
+				promisifyCall(cb, value.e).then_((value2) nothrow {
 					r.resolve(value);
 				});
 			} else {
@@ -228,18 +226,7 @@ interface Promise(T_) : Promise_ {
 		return except((Exception e) => .fatal(e));
 	}
 
-	protected void then_(void delegate(Value) nothrow cb) nothrow;
-
-	final public void thenWithTrace(void delegate(Value) nothrow cb) nothrow {
-		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
-
-		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
-		then_((value) nothrow {
-			auto prev = setBasestack(backBt);
-			scope(exit) recoverBasestack(prev);
-			cb(value);
-		});
-	}
+	public void then_(void delegate(Value) nothrow cb) nothrow;
 }
 
 class DelegatePromise(T) : Promise!T {
@@ -455,10 +442,6 @@ interface PromiseIterator(T) {
 	final Promise!bool each(U)(U delegate(T) cb) nothrow
 	if (is(Promisify!U.T == void) || is(Promisify!U.T == bool))
 	{
-		import upromised.backtrace : backtrace, traceinfo, concat, setBasestack, recoverBasestack;
-
-		Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
-		
 		static if (is(Promisify!U.T == void)) {
 			bool delegate() boolify = () => true;
 		} else {
@@ -474,8 +457,6 @@ interface PromiseIterator(T) {
 					eof = true;
 					return break_;
 				} else {
-					auto prev = setBasestack(backBt);
-					scope(exit) recoverBasestack(prev);
 					return promisifyCall(cb, a.value).then(boolify).then((cont) {
 						done.resolve(cont);
 						return cont;
@@ -496,7 +477,7 @@ class DelegatePromiseIterator(T) : PromiseIterator!T {
 		if (buffer.length > 0) {
 			auto next = buffer[0];
 			buffer = buffer[1..$];
-			done.thenWithTrace(a => next[1].resolve(a));
+			done.then_(a => next[1].resolve(a));
 			return next[0];
 		} else {
 			assert(pending[0] is null);
@@ -814,13 +795,8 @@ unittest {
 	}).nothrow_();
 	assert(called);
 }
-private void do_while(U)(U delegate() cb, DelegatePromise!void r, Throwable.TraceInfo backBt) nothrow {
-	import upromised.backtrace : setBasestack, recoverBasestack;
-
+private void do_while(U)(U delegate() cb, DelegatePromise!void r) nothrow {
 	promisifyCall(cb).then_((v) nothrow {
-		auto prev = setBasestack(backBt);
-		scope(exit) recoverBasestack(prev);
-
 		if (v.e) {
 			r.resolve(Promise!void.Value(v.e));
 			return;
@@ -834,7 +810,7 @@ private void do_while(U)(U delegate() cb, DelegatePromise!void r, Throwable.Trac
 		}
 
 		if (cont) {
-			do_while(cb, r, backBt);
+			do_while(cb, r);
 		} else {
 			r.resolve();
 		}
@@ -843,11 +819,8 @@ private void do_while(U)(U delegate() cb, DelegatePromise!void r, Throwable.Trac
 Promise!void do_while(U)(U delegate() cb) nothrow
 if (is(Promisify!U.T == bool) || is(Promisify!U.T == void))
 {
-	import upromised.backtrace : backtrace, traceinfo, concat;
-
 	auto r = new DelegatePromise!void;
-	Throwable.TraceInfo backBt = ["*async*"].traceinfo.concat(backtrace());
-	do_while(cb, r, backBt);
+	do_while(cb, r);
 	return r;
 }
 static Promise!bool break_;
