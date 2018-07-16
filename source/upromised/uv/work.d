@@ -1,6 +1,7 @@
 module upromised.uv.work;
 import deimos.libuv.uv;
 import deimos.libuv._d;
+import std.exception : enforce;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.promise : DelegatePromise, Promisify, Promise;
 import upromised.uv : uvCheck;
@@ -8,9 +9,10 @@ import upromised.uv : uvCheck;
 class Work {
 private:
     uv_loop_t* ctx;
-    void delegate() nothrow work;
-    void delegate() nothrow end;
-    
+    void delegate() work;
+    DelegatePromise!void result;
+    Promise!void.Value value;
+
 public:
     uv_work_t self;
 
@@ -18,33 +20,45 @@ public:
         this.ctx = ctx;
     }
 
-    Promise!T run(T)(T delegate() cb) nothrow
-    if (is(Promisify!T == Promise!T))
-    {
+    Promise!void run(void delegate() work) nothrow {
         import upromised.promise : promisifyCall;
+        
+        return Promise!void.resolved().then(() {
+            enforce(result is null, "Work already in progress");
 
-        Promise!T.Value value;
-        DelegatePromise!T result = new DelegatePromise!T;
-        work = () nothrow {
-            promisifyCall(cb).then_((valueArg) {
-                value = valueArg;
+            result = new DelegatePromise!void;
+            scope(failure) result = null;
+            this.work = work;
+
+            auto err = uv_queue_work(ctx, &self, (self) nothrow {
+                promisifyCall(self.getSelf!Work().work)
+                .then_((value) nothrow {
+                    self.getSelf!Work().value = value;
+                });
+            }, (selfSelf, status) nothrow {
+                auto self = selfSelf.getSelf!Work;
+                auto result = self.result;
+                self.result = null;
+                result.resolve(self.value);
             });
-        };
-        end = () nothrow {
-            result.resolve(value);
-        };
-        auto err = uv_queue_work(ctx, &self, (self) nothrow {
-            self.getSelf!Work().work();
-        }, (self, status) nothrow {
-            self.getSelf!Work().end();
-        });
+            err.uvCheck();
+            
+            gcretain(this);
+            result.finall(() {
+                gcrelease(this);
+            });
 
-        err.uvCheck(result);
-        gcretain(this);
-        result.finall(() {
-            gcrelease(this);
+            return result;
         });
+    }
 
-        return result;
+    Promise!T run(T)(T delegate() cb) nothrow
+    if (is(Promisify!T == Promise!T) && !is(T == void))
+    {
+
+        T r;
+        return run(() {
+            r = cb();
+        }).then(() => r);
     }
 }
