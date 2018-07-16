@@ -2,7 +2,7 @@ module upromised.loop;
 import std.socket : Address;
 import std.datetime : Duration;
 import upromised.stream : DatagramStream, Stream;
-import upromised.promise : Promise, PromiseIterator;
+import upromised.promise : Promise, PromiseIterator, Promisify;
 
 struct TlsContext {
 	private Object self;
@@ -17,11 +17,21 @@ interface Loop {
 	Promise!Stream tlsHandshake(Stream stream, TlsContext context, string hostname = null) nothrow;
 	Promise!DatagramStream udp(Address addr = null) nothrow;
 	PromiseIterator!int interval(Duration) nothrow;
+	Promise!void work(void delegate()) nothrow;
 	void* inner() nothrow;
 	int run();
 	
 	final Promise!void sleep(Duration a) nothrow {
 		return interval(a).each((_) => false).then((){});
+	}
+
+	final Promise!T work(T)(T delegate() cb) nothrow
+	if (is(Promisify!T == Promise!T) && !is(T == void))
+	{
+		T r;
+		return work(() {
+			r = cb();
+		}).then(() => r);
 	}
 }
 
@@ -196,6 +206,12 @@ Loop defaultLoop() {
 					return timerIterator.then((iterator) => iterator.next(done));
 				}
 			};
+		}
+		
+		override Promise!void work(void delegate() work) {
+			import upromised.uv.work : Work;
+
+			return (new Work(loop)).run(work);
 		}
 	};
 }
