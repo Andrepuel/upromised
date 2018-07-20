@@ -6,6 +6,10 @@ import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.promise : DelegatePromise, Promisify, Promise;
 import upromised.uv : uvCheck;
 
+private {
+    extern(C) void thread_attachThis() nothrow;
+}
+
 class Work {
 private:
     uv_loop_t* ctx;
@@ -31,6 +35,8 @@ public:
             this.work = work;
 
             auto err = uv_queue_work(ctx, &self, (self) nothrow {
+                thread_attachThis();
+
                 promisifyCall(self.getSelf!Work().work)
                 .then_((value) nothrow {
                     self.getSelf!Work().value = value;
