@@ -1,4 +1,5 @@
 module upromised.tokenizer;
+import std.exception : enforce;
 import upromised.promise : DelegatePromiseIterator, Promise, PromiseIterator;
 import upromised.stream : Stream;
 import upromised : fatal;
@@ -82,9 +83,13 @@ protected:
         }
 
         if (underlyingEof) {
-            auto output = buffer;
-            buffer = null;
-            return Promise!(T[]).resolved(output);
+            return Promise!void.resolved()
+            .then(() {
+                enforce((!limit_ && !separator_) || partialReceive_, "EOF unexpected");
+                auto output = buffer;
+                buffer = null;
+                return Promise!(T[]).resolved(output);
+            });
         }
 
         return underlying.each((data) {
@@ -127,12 +132,12 @@ unittest {
         case 1:
             assert(data == "Hello\r\n");
             break;
-        case 2:
-            assert(data == "World");
-            break;
         default: assert(false);
         }
-    }).then((_) {
+    }).except((Exception e) {
+        assert(call++ == 2);
+        assert(e.msg == "EOF unexpected");
+    }).then(() {
         assert(call++ == 3);
     }).nothrow_();
     a.resolve(cast(const(ubyte)[])"\r\nHello\r\nWorld").nothrow_();
@@ -154,12 +159,12 @@ unittest {
         case 1:
             assert(data == "def");
             break;
-        case 2:
-            assert(data == "gh");
-            break;
         default: assert(false);
         }
-    }).then((_) {
+    }).except((Exception e) {
+        assert(call++ == 2);
+        assert(e.msg == "EOF unexpected");
+    }).then(() {
         assert(call++ == 3);
     }).nothrow_();
     a.resolve(cast(const(ubyte)[])"ab").nothrow_();
