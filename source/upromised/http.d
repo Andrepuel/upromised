@@ -413,7 +413,8 @@ unittest {
 	bodyChunked
 		.toAsyncChunks
 		.decodeChunked
-		.readAllChunks.then((data) => body_ = data);
+		.readAllChunks.then((data) => body_ = data)
+		.nothrow_;
 
 	assert(body_ == "supasupa", "%s unexpected".format([cast(const(char)[])request]));
 }

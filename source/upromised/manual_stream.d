@@ -61,9 +61,9 @@ unittest {
     a.read().each((data) {
         assert((cast(const(ubyte)[])data) == "Hello world");
         called = true;
-    });
+    }).nothrow_;
     assert(!called);
-    a.writeToRead(cast(immutable(ubyte)[])"Hello world");
+    a.writeToRead(cast(immutable(ubyte)[])"Hello world").nothrow_;
     assert(called);
 }
 unittest {
@@ -75,14 +75,14 @@ unittest {
     
     a.write(cast(immutable(ubyte)[])"Hello world").then(() {
         called1 = true;
-    });
+    }).nothrow_;
     assert(!called1);
     a.readFromWrite.each((data) {
         assert(!called2);
         called2 = true;
         assert(cast(const(ubyte)[])data == "Hello world");
         return delayed;
-    });
+    }).nothrow_;
     assert(!called1);
     assert(called2);
     delayed.resolve(true);
@@ -98,7 +98,7 @@ unittest {
             return false;
         }).nothrow_();
         assert(!called);
-        a.writeToRead(cast(const(ubyte)[])"sup");
+        a.writeToRead(cast(const(ubyte)[])"sup").nothrow_;
         assert(called);
     }
 }
