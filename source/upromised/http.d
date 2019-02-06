@@ -315,6 +315,14 @@ public:
 			}
 		};
 	}
+
+	Tokenizer!(const(ubyte)) release() nothrow {
+		import std.algorithm : swap;
+
+		Tokenizer!(const(ubyte)) released;
+		inputTokenizer.swap(released);
+		return released;
+	}
 }
 unittest {
 	const(ubyte)[] request;
