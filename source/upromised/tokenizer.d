@@ -51,7 +51,6 @@ public:
         return read_;
     }
 
-protected:
     Promise!(T[]) readOne() nothrow {
         ptrdiff_t posClosed = -1;
         if (separator_.length > 0) {
