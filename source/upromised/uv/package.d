@@ -16,21 +16,21 @@ class UvError : Exception {
 	}
 }
 
-void uvCheck(int r) {
-	if (r < 0) throw new UvError(r);
+void uvCheck(int r, string file = __FILE__, size_t line = __LINE__) {
+	if (r < 0) throw new UvError(r, file, line);
 }
 
-bool uvCheck(T)(int r, DelegatePromise!T t) nothrow {
+bool uvCheck(T)(int r, DelegatePromise!T t, string file = __FILE__, size_t line = __LINE__) nothrow {
     if (r < 0) {
-        t.reject(new UvError(r));
+        t.reject(new UvError(r, file, line));
         return true;
     }
     return false;
 }
 
-bool uvCheck(T)(int r, DelegatePromiseIterator!T t) nothrow {
+bool uvCheck(T)(int r, DelegatePromiseIterator!T t, string file = __FILE__, size_t line = __LINE__) nothrow {
     if (r < 0) {
-        t.reject(new UvError(r));
+        t.reject(new UvError(r, file, line));
         return true;
     }
     return false;
