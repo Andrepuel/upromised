@@ -1,7 +1,8 @@
 module upromised.udp;
-import deimos.libuv.uv : uv_buf_t, uv_loop_t, uv_udp_t;
+import deimos.libuv.uv : uv_buf_t, uv_loop_t, uv_udp_getsockname, uv_udp_t;
 import std.exception : enforce;
-import std.socket : Address;
+import std.socket : Address, AddressFamily;
+import upromised.dns : sockaddr;
 import upromised.memory : gcrelease, gcretain, getSelf;
 import upromised.promise : DelegatePromise, Promise, PromiseIterator;
 import upromised.stream : Datagram, DatagramStream, Interrupted;
@@ -121,5 +122,43 @@ public:
 			gcrelease(self);
 		});
 		return closePromise;
+	}
+
+	void connect(Address dest) {
+		connect(dest.name(), dest.nameLen());
+	}
+
+	void connect(sockaddr* name, int nameLen) {
+		version(Posix) {
+			import core.sys.posix.netdb : connect;
+		} else version(Windows) {
+			import core.sys.windows.winsock2 : connect;
+		}
+		import deimos.libuv.uv : uv_os_fd_t, uv_fileno;
+		import upromised.uv : handle;
+
+		uv_os_fd_t fileno;
+		uv_fileno(self.handle, &fileno).uvCheck;
+		connect(fileno, name, nameLen);
+	}
+
+	void disconnect() {
+		import std.socket : parseAddress;
+		import upromised.dns : sockaddr, sockaddr_in, toAddress;
+
+		sockaddr_in storage;
+		storage.sin_family = AddressFamily.UNSPEC;
+		connect(cast(sockaddr*)&storage, storage.sizeof);
+	}
+
+	Address sockname() {
+		import upromised.dns : sockaddr_in6, sockaddr, toAddress;
+
+		sockaddr_in6 dataStorage;
+		sockaddr* data = cast(sockaddr*)&dataStorage;
+		int len = data.sizeof;
+		uv_udp_getsockname(&self, data, &len).uvCheck();
+
+		return toAddress(data, len);
 	}
 }
