@@ -1,14 +1,14 @@
 module upromised.dns;
-import deimos.libuv.uv : uv_getaddrinfo, uv_getaddrinfo_t, uv_freeaddrinfo, uv_loop_t;
+import deimos.libuv.uv : uv_getaddrinfo, uv_getaddrinfo_t, uv_freeaddrinfo, uv_loop_t, uv_interface_address_t, uv_interface_addresses, uv_free_interface_addresses;
 import deimos.libuv._d : addrinfo;
 import std.socket : Address;
 import upromised.promise : DelegatePromise, Promise;
 import upromised.memory : getSelf, gcretain, gcrelease;
 import upromised.uv : uvCheck;
 version(Posix) {
-	import core.sys.posix.netdb : sockaddr, sockaddr_in, sockaddr_in6;
+	public import core.sys.posix.netdb : sockaddr, sockaddr_in, sockaddr_in6;
 } else version(Windows) {
-	import core.sys.windows.winsock2 : sockaddr, sockaddr_in, sockaddr_in6;
+	public import core.sys.windows.winsock2 : sockaddr, sockaddr_in, sockaddr_in6;
 }
 
 Address[] toAddress(const(addrinfo)* each) nothrow {
@@ -67,4 +67,25 @@ private class GetAddrinfoPromise : DelegatePromise!(Address[]) {
 	const(char)* node;
 	const(char)* service;
 	uv_getaddrinfo_t self;
+}
+
+Address[] listLocalAddresses() {
+	import std.array : array;
+	import std.algorithm : filter, map;
+	import std.socket : AddressFamily;
+
+	uv_interface_address_t* info;
+	int count;
+	uv_interface_addresses(&info, &count);
+	scope(exit) uv_free_interface_addresses(info, count);
+
+	return info[0..count]
+	.filter!((x) => !x.is_internal)
+	.map!((x) {
+		if (x.address.address4.sin_family == AddressFamily.INET6) {
+			return toAddress(cast(const(sockaddr)*)&x.address.address6, x.address.address6.sizeof);
+		} else  {
+			return toAddress(cast(const(sockaddr)*)&x.address.address4, x.address.address4.sizeof);
+		}
+	}).array;
 }
