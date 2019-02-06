@@ -884,3 +884,59 @@ unittest {
 	next.resolve();
 	assert(called == 3);
 }
+Promise!U race(U)(Promise!U[] ps) {
+	DelegatePromise!U result = new DelegatePromise!U;
+	foreach(p; ps) {
+		p.then_((value) nothrow {
+			if (result is null) {
+				return;
+			}
+
+			auto won = result;
+			result = null;
+			won.resolve(value);
+		});
+	}
+	return result;
+}
+// race with a single promise returns the promise
+unittest {
+	int called;
+	DelegatePromise!int wo = new DelegatePromise!int;
+	race([wo]).then((value) {
+		called = value;
+	}).nothrow_;
+	assert(called == 0);
+	wo.resolve(3);
+	assert(called == 3);
+}
+// race with two values returns the first called
+unittest {
+	int called;
+	DelegatePromise!int first = new DelegatePromise!int;
+	DelegatePromise!int second = new DelegatePromise!int;
+	race([first, second]).then((value) {
+		called = value;
+	}).nothrow_;
+	assert(called == 0);
+	second.resolve(2);
+	first.resolve(1);
+	assert(called == 2);
+}
+// race propagates exceptions
+unittest {
+	Exception caught;
+	Exception err = new Exception("my error");
+	DelegatePromise!int first = new DelegatePromise!int;
+	DelegatePromise!int second = new DelegatePromise!int;
+	race([first, second]).then((value) {
+		assert(false);
+	}).except((Exception e) {
+		caught = e;
+	}).nothrow_;
+
+	assert(caught is null);
+	first.reject(err);
+	second.resolve(2);
+	assert(caught is err);
+}
