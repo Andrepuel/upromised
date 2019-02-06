@@ -305,12 +305,13 @@ public:
     Promise!void connect(string hostname = null) nothrow {
         import core.stdc.stdlib : free;
         import std.algorithm : any, map;
-        import std.string : fromStringz;
+        import std.string : fromStringz, toStringz;
 
         extern(C) int function(int, X509_STORE_CTX*) verify;
 
         if (hostname !is null) {
             HostnameExData.set(this.ssl, hostname.ccopy);
+            SSL_set_tlsext_host_name(this.ssl, cast(char*)hostname.toStringz);
             verify = (preverified, ctx) {
                 if (preverified == 0) {
                     return 0;
