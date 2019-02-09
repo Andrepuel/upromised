@@ -10,14 +10,25 @@ import upromised.uv : uvCheck, UvError;
 extern (C) static void readAlloc(uv_handle_t* handle, size_t size, uv_buf_t* buf) nothrow {
 	import core.memory : GC;
 
-	buf.base = cast(char*)GC.malloc(size);
+	version(ARM_HardFloat) {
+		// Using GC.malloc causes memory leak on LDC2 for ArmHF.
+		// The reason is unknown.
+		buf.base = (new char[size]).ptr;
+	} else {
+		buf.base = cast(char*)GC.malloc(size);
+	}
 	gcretain(buf.base);
 	buf.len = size;
 }
 
 const(char)[] shrinkBuf(const(uv_buf_t)* buf, size_t len) nothrow {
 	import core.memory : GC;
-	auto r = cast(const(char)*)GC.realloc(cast(void*)buf.base, len);
+	version(ARM_HardFloat) {
+		auto r = new char[len];
+		r[0..len] = buf.base[0..len];
+	} else {
+		auto r = cast(const(char)*)GC.realloc(cast(void*)buf.base, len);
+	}
 	return r[0..len];
 }
 
